@@ -1,0 +1,23 @@
+# Rust
+/target
+
+# Node / Web
+node_modules
+dist
+apps/web/src/proto/**/*.ts
+
+# Python（proto 生成物不入库，由 scripts/gen_python_proto.sh 生成）
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+services/analysis/app/proto/
+
+# 运行时数据 / 密钥
+/data
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

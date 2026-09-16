@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package music.v1;
+
+// 统一音乐事件模型 —— Rust / Python / TypeScript 三端共享的唯一数据契约。
+//
+// 全局约定：
+//   1. 所有时间字段单位均为秒（double），以音频会话起点为零时刻；
+//   2. 音高统一使用 MIDI 音号（60 = C4）+ 音分（cents）偏差；
+//   3. 所有分析结论必须带 confidence，供 Agent 与教学逻辑判断可信度；
+//   4. 实时与高质量分析通过 source 字段区分，绝不混用一条链路。
+
+// 分析结果来源
+enum Source {
+  SOURCE_UNSPECIFIED = 0;
+  SOURCE_REALTIME = 1;       // 实时低延迟分析（Streaming）
+  SOURCE_HIGH_QUALITY = 2;   // 离线高质量分析（HQ Pipeline）
+}
+
+// 单个音符事件
+message NoteEvent {
+  int32 midi = 1;            // MIDI 音高 0-127
+  double cents_offset = 2;   // 相对十二平均律的偏差（音分）
+  double onset = 3;          // 起始时间（秒）
+  double duration = 4;       // 时长（秒）
+  double velocity = 5;       // 力度 0.0 - 1.0
+  double confidence = 6;     // 置信度 0.0 - 1.0
+}
+
+// 实时音高曲线采样帧（约 20-40ms 一帧）
+message PitchFrame {
+  double frequency_hz = 1;   // 基频（Hz）
+  double midi_cents = 2;     // 连续 MIDI 音高（含小数，可换算 cents）
+  bool voiced = 3;           // 本帧是否存在稳定乐音/人声
+  double confidence = 4;
+}
+
+// 节拍事件
+message BeatEvent {
+  double onset = 1;          // 节拍点时间（秒）
+  int32 beat = 2;            // 小节内第几拍（从 1 开始）
+  int32 bar = 3;             // 第几小节（从 1 开始）
+  double bpm = 4;            // 推断速度
+  double timing_error_ms = 5; // 相对参考节拍的偏差（毫秒，负=提前）
+}
+
+// 和弦事件（Phase 4）
+message ChordEvent {
+  double onset = 1;
+  double duration = 2;
+  string root = 3;            // 根音，如 "C"
+  string quality = 4;         // 性质，如 "maj7" / "min"
+  repeated int32 pitches = 5; // 构成音 MIDI 音号
+  double confidence = 6;
+}
+
+// 速度事件
+message TempoEvent {
+  double time = 1;
+  double bpm = 2;
+}
+
+// 调性事件（Phase 4）
+message KeyEvent {
+  double time = 1;
+  string tonality = 2;        // 如 "C major" / "a minor"
+  int32 tonic_midi = 3;
+  double confidence = 4;
+}
+
+// 小节事件
+message MeasureEvent {
+  int32 index = 1;            // 小节序号（从 1 开始）
+  double start = 2;           // 起始时间（秒）
+  int32 time_signature_num = 3;
+  int32 time_signature_den = 4;
+}
+
+// 歌词事件（Phase 4+）
+message LyricEvent {
+  double start = 1;
+  double duration = 2;
+  string text = 3;
+}
+
+// 力度变化事件
+message DynamicsEvent {
+  double time = 1;
+  double velocity = 2;        // 0.0 - 1.0
+}
+
+// 演奏/演唱评价事件：目标 vs 实际
+message PerformanceEvent {
+  double target_pitch = 1;    // 目标音高（MIDI，可为小数）
+  double actual_pitch = 2;    // 实际音高（MIDI，可为小数）
+  double target_start = 3;    // 目标起始时间（秒）
+  double actual_start = 4;    // 实际起始时间（秒）
+  double pitch_error_cents = 5;  // 音高偏差（音分，负=偏低）
+  double timing_error_ms = 6;    // 节奏偏差（毫秒，负=提前）
+  int32 measure = 7;             // 定位：第几小节
+  int32 note_index = 8;          // 定位：小节内第几个音
+}
+
+// 音高曲线（一整段）
+message PitchCurve {
+  repeated PitchFrame frames = 1;
+}
+
+// 统一音乐事件信封：所有模块只允许通过该结构交换音乐数据
+message MusicEvent {
+  string session_id = 1;
+  double timestamp = 2;       // 事件时间（秒）
+  Source source = 3;
+
+  oneof payload {
+    NoteEvent note = 10;
+    PitchFrame pitch = 11;
+    BeatEvent beat = 12;
+    ChordEvent chord = 13;
+    TempoEvent tempo = 14;
+    KeyEvent key = 15;
+    MeasureEvent measure = 16;
+    LyricEvent lyric = 17;
+    DynamicsEvent dynamics = 18;
+    PerformanceEvent performance = 19;
+  }
+}
+
+// 音符序列：音频转谱后的核心中间表示，可导出 MIDI / MusicXML
+message NoteSequence {
+  repeated NoteEvent notes = 1;
+  double total_duration = 2;
+  int32 bpm = 3;
+  string key = 4;
+  string time_signature = 5;
+}

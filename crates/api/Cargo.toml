@@ -1,0 +1,29 @@
+[package]
+name = "music-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "music-api"
+path = "src/main.rs"
+
+[dependencies]
+music-config = { workspace = true }
+music-domain = { workspace = true }
+music-audio = { workspace = true }
+music-storage = { workspace = true }
+music-analysis-client = { workspace = true }
+music-agent = { workspace = true }
+music-tools = { workspace = true }
+
+tokio = { workspace = true }
+futures = { workspace = true }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }

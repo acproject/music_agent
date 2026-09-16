@@ -1,0 +1,36 @@
+# M0 后端两服务：Python 分析引擎 + Rust 网关。
+# Web 开发态在 apps/web 执行 `pnpm dev`（:5173），经代理访问 :8080。
+services:
+  analysis:
+    build:
+      context: ..
+      dockerfile: deploy/analysis.Dockerfile
+    environment:
+      ANALYSIS_GRPC_PORT: "50051"
+    ports:
+      - "50051:50051"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    environment:
+      HTTP_HOST: "0.0.0.0"
+      HTTP_PORT: "8080"
+      RUST_LOG: "info"
+      ANALYSIS_GRPC_URL: "http://analysis:50051"
+      ANALYSIS_TIMEOUT_MS: "2000"
+      ANALYSIS_MAX_RETRIES: "2"
+      DATABASE_URL: "sqlite:///data/music.db?mode=rwc"
+      AUDIO_DIR: "/data/audio"
+    ports:
+      - "8080:8080"
+    volumes:
+      - music-data:/data
+    depends_on:
+      - analysis
+    restart: unless-stopped
+
+volumes:
+  music-data:

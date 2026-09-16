@@ -1,0 +1,12 @@
+[package]
+name = "music-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+music-agent = { workspace = true }
+music-analysis-client = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }

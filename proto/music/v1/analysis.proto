@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package music.v1;
+
+import "music/v1/events.proto";
+
+// 音乐分析引擎服务（Python 实现；未来性能热点可用 C++ 以同一契约替换）。
+service AnalysisService {
+  // 实时双向流：浏览器音频块流 -> 音乐事件流（pitch / onset / beat ...）。
+  // 要求低延迟，只跑轻量算法；降噪、音源分离等重处理禁止出现在此链路。
+  rpc StreamAudio(stream AudioChunk) returns (stream MusicEvent);
+
+  // 高质量离线分析：整段音频上传，跑完整 pipeline，返回结构化结果与 MIDI。
+  rpc AnalyzeAudio(AnalyzeAudioRequest) returns (AnalyzeAudioResponse);
+
+  // 引擎健康检查
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// 一帧 PCM 音频（Float32 小端，交错声道）
+message AudioChunk {
+  string session_id = 1;
+  int32 sample_rate = 2;      // 实时链路约定 16000
+  int32 channels = 3;         // 实时链路约定 1（单声道）
+  bytes pcm_f32le = 4;        // 交错 PCM 数据
+  int64 seq = 5;              // 客户端递增序号，用于断线续传/排序
+  bool final = 6;             // 最后一帧
+}
+
+message AnalyzeAudioRequest {
+  string recording_id = 1;
+  bytes pcm_f32le = 2;
+  int32 sample_rate = 3;
+  int32 channels = 4;
+  // 希望执行的管线步骤，如 ["pitch", "notes", "beat", "midi"]
+  repeated string pipeline = 5;
+}
+
+message AnalyzeAudioResponse {
+  string recording_id = 1;
+  NoteSequence sequence = 2;
+  repeated MusicEvent events = 3;
+  bytes midi = 4;             // Standard MIDI File (.mid) 二进制
+}
+
+message PingRequest {
+  string message = 1;
+}
+
+message PingResponse {
+  string message = 1;
+  string engine = 2;          // 引擎标识，如 "python-analysis"
+  string version = 3;
+}

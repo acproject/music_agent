@@ -1,0 +1,13 @@
+# M0：gRPC 通信与数值基础
+grpcio>=1.67
+grpcio-tools>=1.67
+protobuf>=5.27
+numpy>=1.26
+
+# M2 计划引入（暂不安装）：
+# aubio           # 实时 YIN 音高 / onset（C 核心，低延迟）
+# librosa         # 高质量分析、节拍、色度
+# crepe           # 高质量基频模型
+# note-seq / basic-pitch  # 音频转 MIDI
+# pretty-midi     # MIDI 生成
+# music21         # MusicXML / 五线谱
