@@ -4,10 +4,12 @@ grpcio-tools>=1.67
 protobuf>=5.27
 numpy>=1.26
 
-# M2 计划引入（暂不安装）：
-# aubio           # 实时 YIN 音高 / onset（C 核心，低延迟）
+# M2 已实现：app/pitch.py 内为纯 numpy YIN 实时音高（40ms/帧，零原生依赖）
+#
+# 后续可选增强（暂不安装）：
+# aubio           # C 核心实时音高/onset，作为 YIN 的加速/对照实现
 # librosa         # 高质量分析、节拍、色度
-# crepe           # 高质量基频模型
+# crepe           # 高质量基频深度模型
 # note-seq / basic-pitch  # 音频转 MIDI
 # pretty-midi     # MIDI 生成
 # music21         # MusicXML / 五线谱

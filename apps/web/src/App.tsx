@@ -103,7 +103,7 @@ export default function App() {
           <h2>实时音频通道自检（WebSocket）</h2>
           {ws && <StatusDot status={ws.ok ? 'up' : 'down'} />}
         </div>
-        <p className="meta">hello → ready → 二进制 PCM 帧 → Python 引擎 pitch 事件回流 → stop</p>
+        <p className="meta">hello → ready → 440Hz 正弦 PCM（6 帧）→ Python YIN pitch 事件回流 → stop</p>
         <button onClick={checkWs} disabled={checking}>
           {checking ? '自检中…' : '执行 WebSocket 自检'}
         </button>
@@ -111,7 +111,7 @@ export default function App() {
           <div className="result">
             <p className={ws.ok ? 'ok' : 'bad'}>
               {ws.ok
-                ? `链路正常：ready ${ws.readyMs ?? '—'}ms · 回流 ${ws.pitchEvents} 个 pitch 事件 · 总耗时 ${ws.totalMs}ms`
+                ? `链路正常：ready ${ws.readyMs ?? '—'}ms · ${ws.voicedCount}/${ws.pitchEvents} voiced · f0=${ws.lastHz?.toFixed(1) ?? '—'}Hz · 总耗时 ${ws.totalMs}ms`
                 : `失败：${ws.error}`}
             </p>
             <pre>{ws.log.join('\n')}</pre>

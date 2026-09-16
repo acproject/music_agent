@@ -6,6 +6,27 @@ import {
   type MicPermissionState,
 } from '../audio/AudioCapture';
 import { MusicSocket, type ReadyInfo, type WsState } from '../audio/MusicSocket';
+import { centsOffset, noteName, PitchTrace } from '../audio/pitchTrace';
+import PitchChart from './PitchChart';
+
+// 目标音候选：C3(48) ~ B5(83)
+const TARGET_NOTES = Array.from({ length: 36 }, (_, i) => 48 + i);
+const TARGET_OPTIONS = [
+  { value: 'free', label: '自由模式（不设目标音）' },
+  ...TARGET_NOTES.map((m) => ({ value: String(m), label: noteName(m) })),
+];
+
+interface PitchReadout {
+  hz: number;
+  midi: number;
+  cents: number;
+  confidence: number;
+}
+
+function formatCents(cents: number): string {
+  const sign = cents > 0 ? '+' : '';
+  return `${sign}${cents}¢`;
+}
 
 type RunState = 'idle' | 'connecting' | 'live' | 'paused' | 'stopping' | 'error';
 
@@ -49,10 +70,12 @@ export default function MicPanel() {
 
   // 250ms 刷新一次的统计（高频计数放 ref，避免每帧 re-render）
   const [stats, setStats] = useState({ sent: 0, dropped: 0, events: 0 });
-  const [lastEvent, setLastEvent] = useState<Record<string, unknown> | null>(null);
+  const [target, setTarget] = useState<number | null>(60); // 默认目标 C4
+  const [readout, setReadout] = useState<PitchReadout | null>(null);
 
   const captureRef = useRef<AudioCapture | null>(null);
   const socketRef = useRef<MusicSocket | null>(null);
+  const traceRef = useRef(new PitchTrace());
   const countersRef = useRef({ sent: 0, dropped: 0, events: 0 });
   const levelRef = useRef(0);
   const meterRef = useRef<HTMLDivElement | null>(null);
@@ -75,11 +98,24 @@ export default function MicPanel() {
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  // 统计定时刷新
+  // 统计定时刷新；同时从音高轨迹读取最近 voiced 帧（陈旧帧视为无声）
   useEffect(() => {
     const timer = window.setInterval(() => {
       setStats({ ...countersRef.current });
-    }, 250);
+      const trace = traceRef.current;
+      const p = trace.lastVoiced();
+      const now = (performance.now() - trace.startTimeMs) / 1000;
+      if (p && now - p.t <= 0.25) {
+        setReadout({
+          hz: p.hz,
+          midi: p.midi,
+          cents: centsOffset(p.midi),
+          confidence: p.confidence,
+        });
+      } else {
+        setReadout(null);
+      }
+    }, 100);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -110,8 +146,9 @@ export default function MicPanel() {
       return;
     }
     setNotice(null);
-    setLastEvent(null);
     setReadyInfo(null);
+    setReadout(null);
+    traceRef.current.reset();
     countersRef.current = { sent: 0, dropped: 0, events: 0 };
     setPaused(false);
     setRunState('connecting');
@@ -163,11 +200,19 @@ export default function MicPanel() {
       },
       onReady: (info) => {
         setReadyInfo(info);
+        traceRef.current.reset();
         setNotice({ kind: 'info', text: `实时会话 ${info.sessionId} 已建立` });
       },
       onEvent: (event) => {
         countersRef.current.events += 1;
-        setLastEvent(event);
+        if (event.type === 'pitch') {
+          traceRef.current.add({
+            hz: Number(event.frequency_hz ?? 0),
+            midi: Number(event.midi_cents ?? 0),
+            voiced: Boolean(event.voiced),
+            confidence: Number(event.confidence ?? 0),
+          });
+        }
       },
       onServerError: (err) => {
         setNotice({
@@ -217,8 +262,20 @@ export default function MicPanel() {
     setRunState('idle');
     setPaused(false);
     levelRef.current = 0;
+    setReadout(null);
     setNotice({ kind: 'info', text: '会话已结束' });
   }, []);
+
+  const targetDeltaCents =
+    readout && target !== null ? Math.round((readout.midi - target) * 100) : null;
+  const deltaClass =
+    targetDeltaCents === null
+      ? ''
+      : Math.abs(targetDeltaCents) <= 25
+        ? 'pitch-good'
+        : Math.abs(targetDeltaCents) <= 50
+          ? 'pitch-warn'
+          : 'pitch-bad';
 
   const live = runState === 'live' || runState === 'paused';
   const busy = runState === 'connecting' || runState === 'stopping';
@@ -226,7 +283,7 @@ export default function MicPanel() {
   return (
     <section className="card mic-card">
       <div className="card-head">
-        <h2>M1 实时音频通路</h2>
+        <h2>M2 实时音高检测</h2>
         <span className={`tag tag-${runState === 'live' ? 'ok' : runState === 'error' ? 'bad' : 'idle'}`}>
           {runState === 'live'
             ? '● LIVE'
@@ -320,12 +377,55 @@ export default function MicPanel() {
         </p>
       )}
 
-      {lastEvent && (
-        <div>
-          <p className="meta">最近回流事件（浏览器 → Rust → Python gRPC → Rust → 浏览器）：</p>
-          <pre>{JSON.stringify(lastEvent, null, 2)}</pre>
+      <div className="pitch-section">
+        <div className="pitch-toolbar">
+          <label className="target-select">
+            <span>目标音</span>
+            <select
+              value={target === null ? 'free' : String(target)}
+              onChange={(e) =>
+                setTarget(e.target.value === 'free' ? null : Number(e.target.value))
+              }
+            >
+              {TARGET_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className={`pitch-readout ${readout ? '' : 'pitch-silent'}`}>
+            <span className="pitch-note">{readout ? noteName(readout.midi) : '—'}</span>
+            <span className="pitch-detail">
+              {readout
+                ? `${readout.hz.toFixed(1)} Hz · ${formatCents(readout.cents)}`
+                : '未检测到乐音'}
+            </span>
+          </div>
+
+          {target !== null && (
+            <div className={`delta-readout ${deltaClass}`}>
+              <span className="delta-label">对目标偏差</span>
+              <span className="delta-value">
+                {targetDeltaCents === null ? '—' : formatCents(targetDeltaCents)}
+              </span>
+            </div>
+          )}
+
+          <div className="conf-readout">
+            <span className="delta-label">置信度</span>
+            <div className="conf-track">
+              <div
+                className="conf-fill"
+                style={{ width: `${readout ? Math.round(readout.confidence * 100) : 0}%` }}
+              />
+            </div>
+          </div>
         </div>
-      )}
+
+        <PitchChart trace={traceRef.current} targetMidi={target} live={live} />
+      </div>
     </section>
   );
 }

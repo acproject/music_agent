@@ -1,10 +1,13 @@
-// M1 WebSocket 自检：验证 hello→ready、二进制 PCM 帧→引擎 pitch 事件回流、stop→stopped。
+// M2 WebSocket 自检：验证 hello→ready、440Hz 正弦 PCM → YIN 音高事件回流
+// （voiced 且 f0≈440Hz）、stop→stopped。
 // 事件路径：浏览器 → Rust 网关 → Python gRPC StreamAudio → Rust → 浏览器。
 
 export interface WsCheckResult {
   ok: boolean;
   readyMs: number | null;
   pitchEvents: number;
+  voicedCount: number;
+  lastHz: number | null;
   totalMs: number;
   log: string[];
   error?: string;
@@ -15,6 +18,8 @@ export function runWsCheck(): Promise<WsCheckResult> {
   const log: string[] = [];
   let readyMs: number | null = null;
   let pitchEvents = 0;
+  let voicedCount = 0;
+  let lastHz: number | null = null;
 
   return new Promise((resolve) => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -32,6 +37,8 @@ export function runWsCheck(): Promise<WsCheckResult> {
         ok,
         readyMs,
         pitchEvents,
+        voicedCount,
+        lastHz,
         totalMs: Math.round(performance.now() - started),
         log,
         error,
@@ -48,7 +55,12 @@ export function runWsCheck(): Promise<WsCheckResult> {
     };
 
     ws.onmessage = (ev: MessageEvent) => {
-      let msg: { type?: string; session_id?: string };
+      let msg: {
+        type?: string;
+        session_id?: string;
+        voiced?: boolean;
+        frequency_hz?: number;
+      };
       try {
         msg = JSON.parse(String(ev.data));
       } catch {
@@ -57,21 +69,39 @@ export function runWsCheck(): Promise<WsCheckResult> {
 
       if (msg.type === 'ready') {
         readyMs = Math.round(performance.now() - started);
-        log.push(`收到 ready（${readyMs}ms，会话 ${msg.session_id ?? '?'}），发送 3 帧静音 PCM`);
-        // 3 × 640 采样 Float32 静音帧
-        const frame = new Float32Array(640).buffer;
-        ws.send(frame);
-        ws.send(frame);
-        ws.send(frame.slice(0));
+        log.push(`收到 ready（${readyMs}ms，会话 ${msg.session_id ?? '?'}），发送 6 帧 440Hz 正弦`);
+        // 6 × 640 采样相位连续 440Hz Float32 PCM
+        const SR = 16000;
+        const N = 640;
+        let phase = 0;
+        for (let f = 0; f < 6; f += 1) {
+          const frame = new Float32Array(N);
+          for (let i = 0; i < N; i += 1) {
+            frame[i] = 0.3 * Math.sin(phase);
+            phase += (2 * Math.PI * 440) / SR;
+          }
+          ws.send(frame.buffer);
+        }
       } else if (msg.type === 'pitch') {
         pitchEvents += 1;
-        if (pitchEvents === 3) {
-          log.push(`收到 ${pitchEvents} 个 pitch 事件，发送 stop`);
+        if (msg.voiced === true) {
+          voicedCount += 1;
+          lastHz = typeof msg.frequency_hz === 'number' ? msg.frequency_hz : null;
+        }
+        if (pitchEvents === 6) {
+          log.push(`收到 ${pitchEvents} 个 pitch 事件（${voicedCount} voiced），发送 stop`);
           ws.send(JSON.stringify({ type: 'stop' }));
         }
       } else if (msg.type === 'stopped') {
         window.clearTimeout(timeout);
-        log.push('收到 stopped，链路正常');
+        if (voicedCount < 5 || lastHz === null || Math.abs(lastHz - 440) / 440 > 0.02) {
+          finish(
+            false,
+            `音高检测异常：voiced=${voicedCount}/6，f0=${lastHz === null ? 'null' : lastHz.toFixed(1)}Hz`,
+          );
+          return;
+        }
+        log.push(`收到 stopped，f0=${lastHz.toFixed(1)}Hz，链路正常`);
         finish(true);
       } else if (msg.type === 'error') {
         window.clearTimeout(timeout);

@@ -1,12 +1,13 @@
 """音乐分析引擎 gRPC 服务入口。
 
-M0 范围：
+当前（M2）范围：
   - Ping：引擎健康检查 / 版本上报；
-  - StreamAudio：双向流通话验证（收到 AudioChunk 回执一帧 unvoiced PitchFrame）；
-  - AnalyzeAudio：显式返回 UNIMPLEMENTED（高质量管线在 M2/M3 落地）。
+  - StreamAudio：实时 YIN 音高检测（numpy），逐帧输出 PitchFrame
+    （frequency_hz / midi_cents / voiced / confidence）；
+  - AnalyzeAudio：显式返回 UNIMPLEMENTED（高质量管线在 M3+ 落地）。
 
-M2 起：StreamAudio 接入 aubio 实时 YIN/onset；M3 起：AnalyzeAudio 输出
-NoteSequence 与 MIDI。所有输出只允许使用 proto 生成的 music.v1 结构。
+M3 起：onset/Note 聚合、AnalyzeAudio 输出 NoteSequence 与 MIDI。
+所有输出只允许使用 proto 生成的 music.v1 结构。
 """
 
 from __future__ import annotations
@@ -25,9 +26,12 @@ if str(_PROTO_ROOT) not in sys.path:
 
 import grpc  # noqa: E402
 
+import numpy as np  # noqa: E402
+
 from music.v1 import analysis_pb2, analysis_pb2_grpc, events_pb2  # noqa: E402
 
 from . import __version__, config  # noqa: E402
+from .pitch import YinDetector  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,10 +52,16 @@ class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
 
     def StreamAudio(self, request_iterator, context):
         """实时音频块流 -> 音乐事件流（M1 为占位回执，M2 接入真实音高检测）。"""
+        # 立即 flush 响应头：否则 gRPC 要等首个 yield 才发头，
+        # 而首个 yield 依赖客户端的第一个音频块，会与"等头才发数据"的客户端形成死锁。
+        context.send_initial_metadata(())
+
         peer = context.peer()
         chunks = 0
         session_id = ""
         sample_count = 0
+        # 每条实时流一个 YIN 实例（检测器无跨帧状态，但便于后续做中值平滑）
+        detector = YinDetector(sample_rate=config.REALTIME_SAMPLE_RATE)
 
         for chunk in request_iterator:
             chunks += 1
@@ -65,28 +75,31 @@ class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
                     chunk.channels,
                 )
 
+            # final 是结束控制标记（PCM 为空），不产生分析事件
+            if chunk.final:
+                break
+
             # 事件时间戳：按已接收 PCM 样本数推算（秒）
             rate = chunk.sample_rate or config.REALTIME_SAMPLE_RATE
             n_samples = len(chunk.pcm_f32le) // 4  # Float32 = 4 字节
             timestamp = sample_count / rate if rate else 0.0
             sample_count += n_samples
 
-            # M1 占位：每帧回执 unvoiced PitchFrame，验证端到端实时通路。
-            # M2 在此对 chunk.pcm_f32le 跑实时 YIN/onset，输出真实 pitch 事件。
-            yield events_pb2.MusicEvent(
-                session_id=chunk.session_id,
-                timestamp=timestamp,
-                source=events_pb2.SOURCE_REALTIME,
-                pitch=events_pb2.PitchFrame(
-                    frequency_hz=0.0,
-                    midi_cents=0.0,
-                    voiced=False,
-                    confidence=0.0,
-                ),
-            )
-
-            if chunk.final:
-                break
+            # 实时 YIN 音高检测：每 40ms 一帧 f0 / 连续 MIDI / voiced / 置信度
+            if n_samples > 0:
+                pcm = np.frombuffer(chunk.pcm_f32le, dtype=np.float32)
+                result = detector.detect(pcm)
+                yield events_pb2.MusicEvent(
+                    session_id=chunk.session_id,
+                    timestamp=timestamp,
+                    source=events_pb2.SOURCE_REALTIME,
+                    pitch=events_pb2.PitchFrame(
+                        frequency_hz=result.frequency_hz,
+                        midi_cents=result.midi_cents,
+                        voiced=result.voiced,
+                        confidence=result.confidence,
+                    ),
+                )
 
         logger.info(
             "stream close session=%s chunks=%d duration=%.2fs",

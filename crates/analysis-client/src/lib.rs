@@ -43,11 +43,15 @@ pub struct AnalysisEngine {
 
 impl AnalysisEngine {
     /// 懒连接：立即返回，首个 RPC 时才真正建连。
+    ///
+    /// 注意：不要在 Endpoint 上设置全局 `timeout`——它会变成所有 RPC 的
+    /// gRPC deadline，把长生命周期的 StreamAudio 双向流在 2s 后强制取消。
+    /// 一元调用（ping/analyze）由调用方用 `tokio::time::timeout` 包裹。
     pub fn new(url: &str, timeout: Duration, max_retries: u32) -> Result<Self> {
         let endpoint = Endpoint::from_shared(url.to_string())
             .map_err(|_| EngineError::InvalidEndpoint(url.to_string()))?
             .connect_timeout(timeout)
-            .timeout(timeout);
+            .tcp_keepalive(Some(Duration::from_secs(30)));
         let channel = endpoint.connect_lazy();
         Ok(Self {
             client: AnalysisServiceClient::new(channel),
