@@ -3,6 +3,7 @@ import { fetchHealth, type HealthResponse } from './api/health';
 import { runWsCheck, type WsCheckResult } from './api/wsCheck';
 import { sampleNote } from './domain/sample';
 import MicPanel from './components/MicPanel';
+import TranscribePanel from './components/TranscribePanel';
 
 type Status = 'unknown' | 'up' | 'down';
 
@@ -54,7 +55,7 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <h1>AI 音乐教学系统</h1>
-        <p className="subtitle">Phase 1 · M0 脚手架自检 —— TypeScript / Rust / Python 三端联调</p>
+        <p className="subtitle">Phase 1 · M3 音频转谱 —— onset/Note 分割 · NoteSequence · VexFlow 五线谱/简谱</p>
       </header>
 
       <section className="grid">
@@ -120,6 +121,8 @@ export default function App() {
       </section>
 
       <MicPanel />
+
+      <TranscribePanel />
 
       <section className="card">
         <div className="card-head">

@@ -9,8 +9,9 @@ mod state;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use music_analysis_client::AnalysisEngine;
 use music_config::AppConfig;
@@ -46,12 +47,14 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(routes::health::health))
         .route("/api/audio/stream", get(routes::ws::stream))
+        .route("/api/music/analyze", post(routes::analyze::analyze))
         .fallback(|| async {
             (
                 StatusCode::NOT_FOUND,
                 Json(json!({"error": "not_found"})),
             )
         })
+        .layer(DefaultBodyLimit::max(routes::analyze::body_limit()))
         .with_state(state);
 
     let addr = config.http.bind_addr();

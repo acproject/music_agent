@@ -1,0 +1,5 @@
+# Shell/Python 脚本在容器与 Git Bash 中必须保持 LF（本机 core.autocrlf=true 会检出 CRLF，
+# 导致 bash 报 `set: pipefail: invalid option` 一类错误）。
+*.sh text eol=lf
+scripts/*.py text eol=lf
+scripts/*.mjs text eol=lf

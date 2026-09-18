@@ -1,12 +1,14 @@
 """音乐分析引擎 gRPC 服务入口。
 
-当前（M2）范围：
+当前（M3）范围：
   - Ping：引擎健康检查 / 版本上报；
   - StreamAudio：实时 YIN 音高检测（numpy），逐帧输出 PitchFrame
     （frequency_hz / midi_cents / voiced / confidence）；
-  - AnalyzeAudio：显式返回 UNIMPLEMENTED（高质量管线在 M3+ 落地）。
+  - AnalyzeAudio：离线管线，整段 PCM → NoteSequence + MusicEvent + MIDI。
+    pipeline 支持 "pitch"（逐帧 PitchFrame 事件）/ "notes"（Note 分割）/
+    "midi"（Standard MIDI File 字节）。
 
-M3 起：onset/Note 聚合、AnalyzeAudio 输出 NoteSequence 与 MIDI。
+M4 起接入节拍/速度自动检测，替换当前的固定 BPM 量化假设。
 所有输出只允许使用 proto 生成的 music.v1 结构。
 """
 
@@ -31,6 +33,8 @@ import numpy as np  # noqa: E402
 from music.v1 import analysis_pb2, analysis_pb2_grpc, events_pb2  # noqa: E402
 
 from . import __version__, config  # noqa: E402
+from .midi import write_smf  # noqa: E402
+from .notes import NoteTracker  # noqa: E402
 from .pitch import YinDetector  # noqa: E402
 
 logging.basicConfig(
@@ -38,6 +42,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("analysis")
+
+# M3 固定量化假设：M4 节拍检测落地前，NoteSequence/MIDI 使用统一默认速度与拍号
+DEFAULT_BPM = 100
+DEFAULT_TIME_SIGNATURE = "4/4"
 
 
 class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
@@ -109,10 +117,105 @@ class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
         )
 
     def AnalyzeAudio(self, request, context):
-        # 高质量管线（降噪/分离/转谱/MIDI）在 M2/M3 实现
-        context.abort(
-            grpc.StatusCode.UNIMPLEMENTED,
-            "high-quality analysis pipeline will land in M2/M3",
+        """离线高质量管线：整段 Float32 PCM → NoteSequence / 事件 / MIDI。"""
+        if len(request.pcm_f32le) < 4 or len(request.pcm_f32le) % 4 != 0:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "pcm_f32le must contain at least one Float32 sample",
+            )
+
+        sample_rate = request.sample_rate or config.REALTIME_SAMPLE_RATE
+        if not 8_000 <= sample_rate <= 192_000:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"unsupported sample_rate: {sample_rate}",
+            )
+        channels = max(1, request.channels)
+
+        pcm = np.frombuffer(request.pcm_f32le, dtype=np.float32)
+        if channels > 1:
+            # 交错多声道下混为单声道（M3 分析仅支持单音旋律）
+            usable = (pcm.size // channels) * channels
+            pcm = pcm[:usable].reshape(-1, channels).mean(axis=1).astype(np.float32)
+
+        steps = {s.strip() for s in request.pipeline if s.strip()}
+        if not steps:
+            steps = {"notes", "midi"}
+        unknown = steps - {"pitch", "notes", "midi"}
+        if unknown:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"unsupported pipeline steps: {sorted(unknown)}",
+            )
+
+        total_duration = pcm.size / sample_rate
+        logger.info(
+            "analyze open recording=%s sr=%d dur=%.2fs pipeline=%s",
+            request.recording_id,
+            sample_rate,
+            total_duration,
+            sorted(steps),
+        )
+
+        notes, track = NoteTracker(sample_rate=sample_rate).run(pcm)
+
+        seq = events_pb2.NoteSequence(
+            total_duration=total_duration,
+            bpm=DEFAULT_BPM,
+            time_signature=DEFAULT_TIME_SIGNATURE,
+        )
+        events: list[events_pb2.MusicEvent] = []
+
+        if "pitch" in steps:
+            for i, t in enumerate(track.times):
+                events.append(
+                    events_pb2.MusicEvent(
+                        session_id=request.recording_id,
+                        timestamp=float(t),
+                        source=events_pb2.SOURCE_HIGH_QUALITY,
+                        pitch=events_pb2.PitchFrame(
+                            frequency_hz=float(track.frequency_hz[i]),
+                            midi_cents=float(track.midi_cents[i]),
+                            voiced=bool(track.voiced[i]),
+                            confidence=float(track.confidence[i]),
+                        ),
+                    )
+                )
+
+        if "notes" in steps:
+            for n in notes:
+                note_event = events_pb2.NoteEvent(
+                    midi=n.midi,
+                    cents_offset=n.cents_offset,
+                    onset=n.onset,
+                    duration=n.duration,
+                    velocity=n.velocity,
+                    confidence=n.confidence,
+                )
+                seq.notes.append(note_event)
+                events.append(
+                    events_pb2.MusicEvent(
+                        session_id=request.recording_id,
+                        timestamp=n.onset,
+                        source=events_pb2.SOURCE_HIGH_QUALITY,
+                        note=note_event,
+                    )
+                )
+
+        midi_bytes = write_smf(notes, bpm=DEFAULT_BPM) if "midi" in steps else b""
+
+        logger.info(
+            "analyze close recording=%s notes=%d events=%d midi=%dB",
+            request.recording_id,
+            len(seq.notes),
+            len(events),
+            len(midi_bytes),
+        )
+        return analysis_pb2.AnalyzeAudioResponse(
+            recording_id=request.recording_id,
+            sequence=seq,
+            events=events,
+            midi=midi_bytes,
         )
 
 

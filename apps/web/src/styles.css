@@ -415,6 +415,174 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* ============ M3 音频转谱 ============ */
+
+.quant-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 4px;
+  flex-wrap: wrap;
+}
+
+.score-block {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.score-block h3 {
+  margin: 12px 0 4px;
+  font-size: 15px;
+}
+
+/* 五线谱使用浅色"纸张"底：VexFlow 默认以黑色绘制，深底下不可见 */
+.score-scroll {
+  background: #fbf8f1;
+  border-radius: 10px;
+  overflow-x: auto;
+  padding: 8px 10px;
+}
+
+.staff-host {
+  min-height: 120px;
+}
+
+.staff-host svg {
+  display: block;
+}
+
+/* ---- 简谱 ---- */
+
+.jianpu {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 8px 4px;
+  background: var(--panel-2);
+  border-radius: 10px;
+}
+
+.jp-measure {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-right: 2px solid var(--muted);
+  min-height: 88px;
+}
+
+.jp-measure:first-child {
+  border-left: 2px solid var(--muted);
+}
+
+.jp-bar-no {
+  align-self: flex-start;
+  width: 12px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-right: 6px;
+}
+
+.jp-glyph {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  width: 32px;
+  padding-bottom: 16px;
+}
+
+.jp-oct {
+  height: 11px;
+  font-size: 12px;
+  line-height: 11px;
+  letter-spacing: -1px;
+  color: var(--accent);
+}
+
+.jp-num-row {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+}
+
+.jp-num {
+  font-size: 27px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.jp-accid {
+  font-size: 15px;
+  margin-right: 1px;
+  color: var(--unknown);
+}
+
+.jp-dash {
+  width: 26px;
+  text-align: center;
+  font-size: 22px;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.jp-dot {
+  font-size: 24px;
+  font-weight: 700;
+  padding: 0 2px;
+  margin-bottom: 12px;
+}
+
+/* 减时线（八分/十六分）画在数字与八度点之下 */
+.jp-beam1::after,
+.jp-beam2::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 6px;
+  height: 2px;
+  background: var(--text);
+  border-radius: 1px;
+}
+
+.jp-beam2::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 11px;
+  height: 2px;
+  background: var(--text);
+  border-radius: 1px;
+}
+
+.note-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.note-chip {
+  display: inline-flex;
+  flex-direction: column;
+  background: var(--panel-2);
+  border: 1px solid rgba(151, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.note-chip em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .pitch-good .delta-value {
   color: var(--ok);
 }

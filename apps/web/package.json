@@ -4,16 +4,17 @@
   "version": "0.1.0-m0",
   "type": "module",
   "scripts": {
-    "postinstall": "bash ../../scripts/gen_web_proto.sh",
+    "postinstall": "node ../../scripts/gen_proto.mjs web --from-install",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "proto": "bash ../../scripts/gen_web_proto.sh"
+    "proto": "node ../../scripts/gen_proto.mjs web"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "vexflow": "^5.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
