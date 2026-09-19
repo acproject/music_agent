@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 music-agent = { workspace = true }
 music-analysis-client = { workspace = true }
+music-domain = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }

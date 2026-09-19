@@ -6,7 +6,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.midi import MidiTrack, write_smf, write_smf_multitrack  # noqa: E402
+from app.midi import (  # noqa: E402
+    MidiTrack,
+    _integrate_tempo_map,
+    _normalize_tempo_map,
+    _sec_to_tick,
+    _tick_to_sec,
+    write_smf,
+    write_smf_multitrack,
+)
 from app.notes import DetectedNote  # noqa: E402
 
 
@@ -32,7 +40,7 @@ def parse_track(buf, body_off, body_end):
     """返回 {'ons':[(tick,pitch,vel,ch)], 'offs':..., 'tempo', 'timesig', 'name', 'programs':{ch:prog}}。"""
     off = body_off
     tick = 0
-    out = {"ons": [], "offs": [], "tempo": None, "timesig": None, "name": None, "programs": {}}
+    out = {"ons": [], "offs": [], "tempo": None, "tempos": [], "timesig": None, "name": None, "programs": {}}
     while off < body_end:
         delta, off = read_vlq(buf, off)
         tick += delta
@@ -47,7 +55,9 @@ def parse_track(buf, body_off, body_end):
             data = buf[off:off + length]
             off += length
             if meta_type == 0x51 and length == 3:
-                out["tempo"] = int.from_bytes(data, "big")
+                micros = int.from_bytes(data, "big")
+                out["tempo"] = micros
+                out["tempos"].append((tick, micros))
             elif meta_type == 0x58 and length == 4:
                 out["timesig"] = (data[0], 2 ** data[1])
             elif meta_type == 0x03:
@@ -167,6 +177,47 @@ class SmfWriterTest(unittest.TestCase):
         fmt, ntrk, _, tracks = iter_tracks(data)
         self.assertEqual((fmt, ntrk), (1, 2))
         self.assertEqual(tracks[0]["tempo"], 500_000)
+
+
+class TempoMapTest(unittest.TestCase):
+    def test_normalize_sorts_and_pads_origin(self):
+        anchors = _normalize_tempo_map([(2.0, 90), (0.5, 120)])
+        self.assertEqual(anchors, [(0.0, 120), (0.5, 120), (2.0, 90)])
+
+    def test_normalize_none_is_single_anchor(self):
+        self.assertEqual(_normalize_tempo_map(None, fallback_bpm=77), [(0.0, 77)])
+
+    def test_sec_tick_roundtrip(self):
+        # 0~2s 为 120bpm（每秒 2 拍 = 960 tick），之后 60bpm（每秒 480 tick）
+        integrated = _integrate_tempo_map([(0.0, 120), (2.0, 60)])
+        self.assertAlmostEqual(_sec_to_tick(1.0, integrated), 960.0)
+        self.assertAlmostEqual(_sec_to_tick(2.0, integrated), 1920.0)
+        # 2s 后进入 60bpm 段：3s → 1920 + 480
+        self.assertAlmostEqual(_sec_to_tick(3.0, integrated), 2400.0)
+        # 末段外推
+        self.assertAlmostEqual(_sec_to_tick(4.5, integrated), 3120.0)
+        # 反函数闭合
+        for sec in [0.3, 1.7, 2.0, 3.2, 5.0]:
+            self.assertAlmostEqual(_tick_to_sec(_sec_to_tick(sec, integrated), integrated), sec)
+
+    def test_multitempo_smf_conductor_events(self):
+        notes = [
+            DetectedNote(60, 0.0, 1.0, 0.5, 0.8, 0.9),   # 120bpm 段内
+            DetectedNote(64, 0.0, 3.0, 0.5, 0.8, 0.9),   # 60bpm 段内
+        ]
+        data = write_smf(notes, tempo_map=[(0.0, 120), (2.0, 60)])
+        _, _, _, tracks = iter_tracks(data)
+        # 指挥轨含两个 FF51：tick 0 → 500000(120bpm)，tick 1920 → 1_000_000(60bpm)
+        self.assertEqual(tracks[0]["tempos"], [(0, 500_000), (1920, 1_000_000)])
+        # 音符 tick 跟随分段映射：1.0s→960；3.0s→2400
+        ons = tracks[1]["ons"]
+        self.assertEqual([t for t, _, _, _ in ons], [960, 2400])
+
+    def test_single_anchor_equivalent_to_legacy(self):
+        notes = [DetectedNote(67, 0.0, 1.2, 0.6, 0.9, 0.9)]
+        legacy = write_smf(notes, bpm=100)
+        mapped = write_smf(notes, tempo_map=[(0.0, 100)])
+        self.assertEqual(legacy, mapped)
 
 
 if __name__ == "__main__":

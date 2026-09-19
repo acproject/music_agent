@@ -28,3 +28,4 @@ services/analysis/app/proto/
 .idea/
 .vscode/
 .DS_Store
+.env

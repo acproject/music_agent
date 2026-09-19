@@ -1,7 +1,8 @@
 //! AI 音乐教学系统 HTTP / WebSocket 网关（Rust 核心入口）。
 //!
 //! M0：/health 聚合 Python 分析引擎状态；/api/audio/stream 完成 WS 握手自检。
-//! 后续：REST 音乐分析接口、Agent SSE 对话、音频会话持久化在此挂载。
+//! M3：/api/music/analyze 离线转谱。
+//! Agent：/api/agent/chat ReAct 工具调用对话（LLM 未配置时 503 降级）。
 
 mod routes;
 mod state;
@@ -13,6 +14,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use music_agent::{LlmProvider, OpenAiCompatibleProvider};
 use music_analysis_client::AnalysisEngine;
 use music_config::AppConfig;
 use serde_json::json;
@@ -38,16 +40,41 @@ async fn main() -> anyhow::Result<()> {
     )?);
     tracing::info!("analysis engine client -> {}", config.analysis.grpc_url);
 
+    // LLM Provider：启用失败不阻断网关启动，Agent 路由降级为 503。
+    let llm: Option<Arc<dyn LlmProvider>> = if config.llm.enabled() {
+        match OpenAiCompatibleProvider::new(&config.llm) {
+            Ok(provider) => {
+                tracing::info!(
+                    "llm agent enabled -> {} model={}",
+                    config.llm.base_url,
+                    config.llm.model
+                );
+                Some(Arc::new(provider))
+            }
+            Err(e) => {
+                tracing::warn!("llm provider init failed, agent disabled: {e}");
+                None
+            }
+        }
+    } else {
+        tracing::info!(
+            "llm agent disabled: set LLM_API_KEY (or point LLM_BASE_URL at localhost) to enable /api/agent/chat"
+        );
+        None
+    };
+
     let state = AppState {
         config: Arc::new(config.clone()),
         db,
         engine,
+        llm,
     };
 
     let app = Router::new()
         .route("/health", get(routes::health::health))
         .route("/api/audio/stream", get(routes::ws::stream))
         .route("/api/music/analyze", post(routes::analyze::analyze))
+        .route("/api/agent/chat", post(routes::agent::chat))
         .fallback(|| async {
             (
                 StatusCode::NOT_FOUND,

@@ -5,8 +5,15 @@ import { ScorePlayer, type PlaybackTrack, type VoiceKind } from '../audio/scoreP
 import { INSTRUMENTS, instrumentLabel } from '../audio/soundfont';
 import { noteName } from '../audio/pitchTrace';
 import { buildArrangement, type TrackId } from '../domain/arrangement';
-import { quantize } from '../domain/quantize';
+import { quantize, parseBeatsPerBar } from '../domain/quantize';
+import {
+  constantTempoMap,
+  describeTempoMap,
+  tempoMapFromEvents,
+  type TempoAnchor,
+} from '../domain/tempoMap';
 import { TICKS_PER_UNIT, writeSmf } from '../domain/midiWriter';
+import { recordingStore } from '../domain/recordingStore';
 import StaffScore from './StaffScore';
 import JianpuScore from './JianpuScore';
 
@@ -35,6 +42,39 @@ function synthArpeggio(): Float32Array {
   return pcm;
 }
 
+/** 两段速度旋律（120BPM 4s + 90BPM 4s），用于多段变速端到端自测。 */
+function synthTwoTempo(): Float32Array {
+  const sr = TARGET_SAMPLE_RATE;
+  const gapSec = 0.06;
+  const segments = [
+    { bpm: 120, beats: 8, seconds: 4.0 },
+    { bpm: 90, beats: 6, seconds: 4.0 },
+  ];
+  const midis = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83];
+  const totalSec = segments.reduce((acc, s) => acc + s.seconds, 0);
+  const pcm = new Float32Array(Math.round(totalSec * sr));
+  const fade = Math.round(0.008 * sr);
+  let cursor = 0;
+  let noteIdx = 0;
+  segments.forEach((seg) => {
+    const beatSec = 60 / seg.bpm;
+    const noteSec = beatSec - gapSec;
+    for (let b = 0; b < seg.beats; b += 1) {
+      const midi = midis[noteIdx];
+      noteIdx += 1;
+      const freq = 440 * 2 ** ((midi - 69) / 12);
+      const start = Math.round(cursor * sr);
+      const n = Math.round(noteSec * sr);
+      for (let k = 0; k < n && start + k < pcm.length; k += 1) {
+        const env = k < fade ? k / fade : k > n - fade ? (n - k) / fade : 1;
+        pcm[start + k] = 0.3 * env * Math.sin(2 * Math.PI * freq * (k / sr));
+      }
+      cursor += beatSec;
+    }
+  });
+  return pcm;
+}
+
 function concatChunks(chunks: ArrayBuffer[]): Float32Array {
   const total = chunks.reduce((acc, c) => acc + c.byteLength, 0);
   const out = new Float32Array(total / 4);
@@ -49,6 +89,8 @@ function concatChunks(chunks: ArrayBuffer[]): Float32Array {
 export default function TranscribePanel() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [bpm, setBpm] = useState(100);
+  /** true=采用后端检测的多段 tempo map；false=用户手动选定恒定速度 */
+  const [tempoAuto, setTempoAuto] = useState(true);
   const [recordSec, setRecordSec] = useState(0);
   const [pcmSec, setPcmSec] = useState(0);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
@@ -74,6 +116,8 @@ export default function TranscribePanel() {
   const playerRef = useRef<ScorePlayer | null>(null);
   const chunksRef = useRef<ArrayBuffer[]>([]);
   const pcmRef = useRef<Float32Array | null>(null);
+  /** 本次分析来源标签（随录音上下文提供给 AI 老师工具） */
+  const sourceLabelRef = useRef('麦克风录音');
   const timerRef = useRef(0);
   const startAtRef = useRef(0);
 
@@ -90,13 +134,22 @@ export default function TranscribePanel() {
       const resp = await analyzeAudio(pcm, {
         sampleRate: TARGET_SAMPLE_RATE,
         channels: 1,
-        pipeline: ['notes', 'midi'],
+        pipeline: ['notes', 'midi', 'rhythm'],
       });
       setResult(resp);
       if (resp.sequence.bpm > 0) {
         setBpm(resp.sequence.bpm);
       }
+      setTempoAuto(true); // 新分析默认跟随检测 map
       setPhase('done');
+      // 写入共享录音上下文，供 AI 老师面板的工具调用使用
+      recordingStore.set({
+        pcm,
+        sampleRate: TARGET_SAMPLE_RATE,
+        label: sourceLabelRef.current,
+        durationSec: pcm.length / TARGET_SAMPLE_RATE,
+        analyzedAt: Date.now(),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase(pcmRef.current ? 'done' : 'idle');
@@ -161,17 +214,53 @@ export default function TranscribePanel() {
     setError(null);
     setResult(null);
     const pcm = synthArpeggio();
+    sourceLabelRef.current = '合成测试音（C-E-G-C）';
     pcmRef.current = pcm;
     setPcmSec(pcm.length / TARGET_SAMPLE_RATE);
     await runAnalysis(pcm);
   }, [runAnalysis]);
 
+  const handleSyntheticTwoTempo = useCallback(async () => {
+    setError(null);
+    setResult(null);
+    const pcm = synthTwoTempo();
+    sourceLabelRef.current = '合成变速测试音（120→90）';
+    pcmRef.current = pcm;
+    setPcmSec(pcm.length / TARGET_SAMPLE_RATE);
+    await runAnalysis(pcm);
+  }, [runAnalysis]);
+
+  // M4：后端检测拍号（如 3/4）与调性（KeyEvent 扁平化在 events 中）
+  const beatsPerBar = useMemo(
+    () => parseBeatsPerBar(result?.sequence.time_signature),
+    [result],
+  );
+  const detectedKey = useMemo(() => {
+    const e = result?.events.find((x) => x.type === 'key');
+    if (!e || typeof e.tonality !== 'string') {
+      return null;
+    }
+    return { tonality: e.tonality, confidence: Number(e.confidence ?? 0) };
+  }, [result]);
+
+  // 检测到的多段速度（tempo 事件；无事件时用 sequence.bpm 退化为单段）
+  const detectedTempoMap = useMemo<TempoAnchor[]>(
+    () => tempoMapFromEvents(result?.events, result?.sequence.bpm || 100),
+    [result],
+  );
+  // 实际生效 map：自动=检测多段；手动=下拉所选恒定速度
+  const tempoMap = useMemo<TempoAnchor[]>(
+    () => (tempoAuto ? detectedTempoMap : constantTempoMap(bpm)),
+    [tempoAuto, detectedTempoMap, bpm],
+  );
+  const tempoSummary = useMemo(() => describeTempoMap(tempoMap), [tempoMap]);
+
   const score = useMemo(
-    () => (result ? quantize(result.sequence.notes, bpm) : null),
-    [result, bpm],
+    () => (result ? quantize(result.sequence.notes, { tempoMap, beatsPerBar }) : null),
+    [result, tempoMap, beatsPerBar],
   );
 
-  // 多轨编排：旋律 + 自动低音/和弦垫（推断调性、每小节选顺阶三和弦）
+  // 多轨编排：旋律 + 自动低音/和弦垫（M4 优先用后端调性，兜底本地推断）
   const arrangement = useMemo(
     () =>
       score
@@ -180,9 +269,10 @@ export default function TranscribePanel() {
             melodyProgram: programs.melody,
             bassProgram: programs.bass,
             padProgram: programs.pad,
+            detectedKey,
           })
         : null,
-    [score, accompOn, programs],
+    [score, accompOn, programs, detectedKey],
   );
 
   // 重新分析或改速度导致 score 变化时，停止旧播放
@@ -209,7 +299,7 @@ export default function TranscribePanel() {
     }));
     setPlaying(true);
     try {
-      await playerRef.current.play(playbackTracks, bpm, {
+      await playerRef.current.play(playbackTracks, tempoMap, {
         onActive: setActiveItem,
         onEnd: () => {
           setPlaying(false);
@@ -223,7 +313,7 @@ export default function TranscribePanel() {
       setError(e instanceof Error ? e.message : String(e));
       setPlaying(false);
     }
-  }, [arrangement, gains, bpm]);
+  }, [arrangement, gains, tempoMap]);
 
   const handleStopPlay = useCallback(() => {
     playerRef.current?.stop();
@@ -245,17 +335,20 @@ export default function TranscribePanel() {
         velocity: n.velocity,
       })),
     }));
-    const bytes = writeSmf(smfTracks, bpm);
-    const blob = new Blob([bytes], { type: 'audio/midi' });
+    const bytes = writeSmf(smfTracks, tempoMap);
+    // slice() 得到自带独立 ArrayBuffer 的精确副本，满足 BlobPart 类型要求
+    const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'audio/midi' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `music_agent_arrangement_${bpm}bpm.mid`;
+    a.download = tempoMap.length > 1
+      ? `music_agent_arrangement_tempo${tempoMap.length}.mid`
+      : `music_agent_arrangement_${tempoMap[0]?.bpm ?? bpm}bpm.mid`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }, [arrangement, bpm]);
+  }, [arrangement, tempoMap, bpm]);
 
   const notes = result?.sequence.notes ?? [];
 
@@ -291,6 +384,15 @@ export default function TranscribePanel() {
         >
           合成测试音（C-E-G-C）
         </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={handleSyntheticTwoTempo}
+          disabled={phase === 'recording' || phase === 'analyzing'}
+          title="前 4 秒 120BPM、后 4 秒 90BPM，验证多段变速检测与播放"
+        >
+          合成变速测试音（120→90）
+        </button>
         {arrangement && (
           <button
             type="button"
@@ -315,11 +417,38 @@ export default function TranscribePanel() {
         <div className="quant-row">
           <label className="target-select">
             <span>量化速度</span>
-            <select value={bpm} onChange={(e) => setBpm(Number(e.target.value))}>
+            <select
+              value={bpm}
+              onChange={(e) => {
+                setBpm(Number(e.target.value));
+                setTempoAuto(false);
+              }}
+            >
+              {tempoAuto && !BPM_OPTIONS.includes(bpm) && (
+                <option value={bpm}>♩={bpm}（检测）</option>
+              )}
               {BPM_OPTIONS.map((b) => <option key={b} value={b}>♩={b}</option>)}
             </select>
           </label>
-          <span className="meta">4/4 拍 · 16 分网格 · M4 起替换为自动节拍检测</span>
+          {!tempoAuto && (
+            <button
+              type="button"
+              className="btn-secondary btn-mini"
+              onClick={() => {
+                setBpm(result?.sequence.bpm || bpm);
+                setTempoAuto(true);
+              }}
+            >
+              恢复检测速度
+            </button>
+          )}
+          <span className="meta">
+            {score?.timeSignature ?? '4/4'} 拍 · 16 分网格 ·
+            {' '}
+            {tempoAuto ? `自动检测 ${describeTempoMap(detectedTempoMap)}` : `手动 ♩=${bpm}`}
+            {tempoAuto && detectedTempoMap.length > 1 ? `（${detectedTempoMap.length} 段变速）` : ''}
+            {result?.sequence.key ? ` · ${result.sequence.key}` : ''}
+          </span>
         </div>
       )}
 
@@ -338,7 +467,7 @@ export default function TranscribePanel() {
                   checked={accompOn}
                   onChange={(e) => setAccompOn(e.target.checked)}
                 />
-                自动伴奏（低音 + 和弦垫 · 推断调性 {arrangement?.keyName ?? '—'}）
+                自动伴奏（低音 + 和弦垫 · 调性 {arrangement?.keyName ?? '—'}）
               </label>
             </div>
             {arrangement?.tracks.map((track) => {
@@ -392,7 +521,7 @@ export default function TranscribePanel() {
               <button type="button" onClick={handlePlay}>▶ 播放谱面</button>
             )}
             <span className="meta">
-              SoundFont 采样 · ♩={bpm} · {arrangement?.tracks.length ?? 1} 轨齐奏
+              SoundFont 采样 · {tempoSummary} · {arrangement?.tracks.length ?? 1} 轨齐奏
               （标准音高，不含音分偏差）
             </span>
           </div>

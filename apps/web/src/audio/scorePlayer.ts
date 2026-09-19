@@ -7,7 +7,7 @@
 // - 高亮：仅旋律音带 globalIndex，rAF 轮询音频时钟定位当前条目。
 
 import type { ArrangementNote } from '../domain/arrangement';
-import { UNITS_PER_BEAT } from '../domain/quantize';
+import { unitsToSec, type TempoAnchor } from '../domain/tempoMap';
 import { loadInstrument } from './soundfont';
 import type { Player } from 'soundfont-player';
 
@@ -39,11 +39,11 @@ function midiToFreq(midi: number): number {
   return 440 * 2 ** ((midi - 69) / 12);
 }
 
-function flatten(track: PlaybackTrack, secPerUnit: number): FlatEvent[] {
+function flatten(track: PlaybackTrack, tempoMap: TempoAnchor[]): FlatEvent[] {
   return track.notes.map((n) => ({
     globalIndex: n.globalIndex ?? null,
-    startSec: n.startUnit * secPerUnit,
-    endSec: (n.startUnit + n.durationUnits) * secPerUnit,
+    startSec: unitsToSec(n.startUnit, tempoMap),
+    endSec: unitsToSec(n.startUnit + n.durationUnits, tempoMap),
     midi: n.midi,
     velocity: n.velocity,
   }));
@@ -123,7 +123,7 @@ export class ScorePlayer {
 
   async play(
     tracks: PlaybackTrack[],
-    bpm: number,
+    tempoMap: TempoAnchor[],
     handlers: ScorePlayerHandlers,
   ): Promise<void> {
     this.teardown(false);
@@ -140,11 +140,9 @@ export class ScorePlayer {
     bus.connect(this.master!);
     this.bus = bus;
 
-    const secPerUnit = 60 / bpm / UNITS_PER_BEAT;
-
-    // 每轨：展开事件 + 增益节点 + 先并行加载好音色（避免下载耗时排乱音频时钟）
+    // 每轨：展开事件（多段变速按 tempoMap 换算时间）+ 增益节点 + 并行加载音色
     const prepared = tracks.map((track) => {
-      const events = flatten(track, secPerUnit);
+      const events = flatten(track, tempoMap);
       this.eventsByTrack.push({ trackId: track.id, events });
       const trackGain = ctx.createGain();
       trackGain.gain.value = track.gain;

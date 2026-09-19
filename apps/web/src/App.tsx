@@ -4,6 +4,7 @@ import { runWsCheck, type WsCheckResult } from './api/wsCheck';
 import { sampleNote } from './domain/sample';
 import MicPanel from './components/MicPanel';
 import TranscribePanel from './components/TranscribePanel';
+import AgentChat from './components/AgentChat';
 
 type Status = 'unknown' | 'up' | 'down';
 
@@ -55,7 +56,7 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <h1>AI 音乐教学系统</h1>
-        <p className="subtitle">Phase 1 · M3 音频转谱 —— onset/Note 分割 · NoteSequence · VexFlow 五线谱/简谱</p>
+        <p className="subtitle">M4 音频转谱与节奏分析 · ReAct AI 老师（工具调用闭环）· VexFlow 五线谱/简谱</p>
       </header>
 
       <section className="grid">
@@ -123,6 +124,8 @@ export default function App() {
       <MicPanel />
 
       <TranscribePanel />
+
+      <AgentChat />
 
       <section className="card">
         <div className="card-head">

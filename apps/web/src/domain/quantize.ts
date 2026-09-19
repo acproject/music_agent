@@ -1,4 +1,4 @@
-// 秒级 NoteSequence → 小节/拍网格量化（M3：固定 BPM + 4/4 拍号 + 16 分音符分辨率）。
+// 秒级 NoteSequence → 小节/拍网格量化（16 分音符分辨率）。
 //
 // 关键约束（VexFlow 排版踩坑总结）：
 //  - 每个音符必须有显式的网格起点与标准时值，绝不允许用 index*duration 反推拍点；
@@ -6,9 +6,10 @@
 //  - 跨小节音符在小节线处拆成两个独立音（M3 不做延音线）；
 //  - 五线谱与简谱共用本模块的唯一输出，两种渲染不得各自再量化。
 //
-// M4 节拍/速度自动检测落地后，bpm/timeSignature 改由 NoteSequence 提供，本模块签名不变。
+// M4 起拍号由 NoteSequence 提供；多段变速时秒→网格通过 tempoMap 分段映射。
 
 import type { NoteDto } from '../api/analyze';
+import { normalizeTempoMap, secToUnits, type TempoAnchor } from './tempoMap';
 
 export const UNITS_PER_BEAT = 4; // 16 分音符为最小网格
 export const BEATS_PER_BAR = 4; // 4/4
@@ -36,8 +37,13 @@ export interface ScoreMeasure {
 }
 
 export interface QuantizedScore {
+  /** 首段速度（展示/兼容用；多段变速以 tempoMap 为准） */
   bpm: number;
   timeSignature: string;
+  /** 每小节拍数（M4 起由后端检测拍号决定，默认 4） */
+  beatsPerBar: number;
+  /** 多段速度锚点（首锚点 timeSec=0） */
+  tempoMap: TempoAnchor[];
   measures: ScoreMeasure[];
   totalUnits: number;
 }
@@ -79,17 +85,28 @@ interface PlacedNote {
 /**
  * 量化入口。
  * @param notes 后端 NoteSequence.notes（秒）
- * @param bpm 目标速度（M3 由前端选择；M4 起取自动检测值）
+ * @param opts.tempoMap 多段速度锚点（秒→16 分网格分段映射）
+ * @param opts.beatsPerBar 每小节拍数（检测拍号，默认 4）
  */
-export function quantize(notes: NoteDto[], bpm: number): QuantizedScore {
-  const secPerUnit = 60 / bpm / UNITS_PER_BEAT;
+export function quantize(
+  notes: NoteDto[],
+  opts: { tempoMap: TempoAnchor[]; beatsPerBar?: number },
+): QuantizedScore {
+  const tempoMap = normalizeTempoMap(opts.tempoMap);
+  const firstBpm = tempoMap[0].bpm;
+  const beatsPerBar = opts.beatsPerBar && opts.beatsPerBar >= 2 ? opts.beatsPerBar : 4;
+  const unitsPerBar = UNITS_PER_BEAT * beatsPerBar;
 
-  // 1) 秒 → 网格，并解决重叠（后音不得侵入前音；零长碎片丢弃）
+  // 1) 秒 → 网格（变速下时长按音乐时间=两端网格差计算），并解决重叠
   const placed: PlacedNote[] = [];
   const sorted = [...notes].sort((a, b) => a.onset - b.onset);
   for (const note of sorted) {
-    const startUnit = Math.max(0, Math.round(note.onset / secPerUnit));
-    const lengthUnits = Math.max(1, Math.round(note.duration / secPerUnit));
+    const startUnit = Math.max(0, Math.round(secToUnits(note.onset, tempoMap)));
+    const lengthUnits = Math.max(
+      1,
+      Math.round(secToUnits(note.onset + note.duration, tempoMap)
+        - secToUnits(note.onset, tempoMap)),
+    );
     const cursor = placed.length > 0
       ? placed[placed.length - 1].startUnit + placed[placed.length - 1].lengthUnits
       : 0;
@@ -116,10 +133,10 @@ export function quantize(notes: NoteDto[], bpm: number): QuantizedScore {
     if (to - from <= 0) {
       return;
     }
-    // 跨小节线切开（同一段连续属性，按 16 网格小节边界分块）
+    // 跨小节线切开（同一段连续属性，按小节边界分块）
     let p = from;
     while (p < to) {
-      const barEnd = (Math.floor(p / UNITS_PER_BAR) + 1) * UNITS_PER_BAR;
+      const barEnd = (Math.floor(p / unitsPerBar) + 1) * unitsPerBar;
       cells.push({ startUnit: p, units: Math.min(to, barEnd) - p, note });
       p = Math.min(to, barEnd);
     }
@@ -133,7 +150,7 @@ export function quantize(notes: NoteDto[], bpm: number): QuantizedScore {
     cursor = p.startUnit + p.lengthUnits;
   }
   // 末尾补休止到完整小节（VexFlow voice 必须填满整小节）
-  const endBarEnd = (Math.floor((cursor - 1) / UNITS_PER_BAR) + 1) * UNITS_PER_BAR;
+  const endBarEnd = (Math.floor((cursor - 1) / unitsPerBar) + 1) * unitsPerBar;
   if (endBarEnd > cursor) {
     pushRun(cursor, endBarEnd, null);
   }
@@ -141,9 +158,9 @@ export function quantize(notes: NoteDto[], bpm: number): QuantizedScore {
   // 3) 按小节分组，单元长度 → 标准时值分解
   const measures: ScoreMeasure[] = [];
   for (const cell of cells) {
-    const barIndex = Math.floor(cell.startUnit / UNITS_PER_BAR);
+    const barIndex = Math.floor(cell.startUnit / unitsPerBar);
     if (measures[barIndex] === undefined) {
-      measures[barIndex] = { startUnit: barIndex * UNITS_PER_BAR, items: [] };
+      measures[barIndex] = { startUnit: barIndex * unitsPerBar, items: [] };
     }
     for (const d of decomposeUnits(cell.units)) {
       if (cell.note) {
@@ -168,11 +185,19 @@ export function quantize(notes: NoteDto[], bpm: number): QuantizedScore {
   }
 
   return {
-    bpm,
-    timeSignature: '4/4',
+    bpm: firstBpm,
+    timeSignature: `${beatsPerBar}/4`,
+    beatsPerBar,
+    tempoMap,
     measures: measures.filter((m): m is ScoreMeasure => m !== undefined),
     totalUnits: endBarEnd,
   };
+}
+
+/** 解析后端拍号字符串（如 "3/4" → 3）；非法 / 缺失时回退 4。 */
+export function parseBeatsPerBar(timeSignature: string | undefined | null): number {
+  const num = Number(timeSignature?.split('/')[0]);
+  return Number.isFinite(num) && num >= 2 && num <= 7 ? num : 4;
 }
 
 const VEX_PITCH_NAMES = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];

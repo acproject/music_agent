@@ -442,6 +442,11 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.btn-mini {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
 .score-block {
   margin-top: 14px;
   display: flex;
@@ -799,4 +804,118 @@ button:disabled {
 
 .lg-free {
   background: #5bb8ff;
+}
+
+/* ========== AI 老师 Agent 对话面板 ========== */
+
+.agent-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-context {
+  margin: 4px 0 10px;
+}
+
+.agent-messages {
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #2c3851;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.agent-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 86%;
+}
+
+.agent-msg-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.agent-msg-assistant {
+  align-self: flex-start;
+}
+
+.agent-msg-role {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.agent-msg-body {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-msg-user .agent-msg-body {
+  background: #3a4a6e;
+  color: #eef3ff;
+  border-bottom-right-radius: 2px;
+}
+
+.agent-msg-assistant .agent-msg-body {
+  background: #232e47;
+  color: var(--text);
+  border: 1px solid #31405f;
+  border-bottom-left-radius: 2px;
+}
+
+.agent-typing {
+  color: var(--muted);
+}
+
+.agent-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.agent-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.agent-input-row textarea {
+  flex: 1;
+  resize: vertical;
+  min-height: 42px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid #31405f;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.agent-input-row textarea:focus {
+  outline: none;
+  border-color: #5b7cff;
+}
+
+.agent-input-row button {
+  align-self: flex-end;
+  min-width: 76px;
+}
+
+.agent-input-row button:disabled,
+.agent-quick button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

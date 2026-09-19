@@ -1168,7 +1168,9 @@ dependencies = [
  "async-trait",
  "music-agent",
  "music-analysis-client",
+ "music-domain",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

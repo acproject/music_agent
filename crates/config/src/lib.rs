@@ -8,8 +8,15 @@ pub struct AppConfig {
     pub http: HttpConfig,
     pub analysis: AnalysisConfig,
     pub llm: LlmConfig,
+    pub agent: AgentConfig,
     pub storage: StorageConfig,
     pub log: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    /// ReAct 循环单轮对话最大工具迭代次数
+    pub max_iterations: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +51,25 @@ pub struct LlmConfig {
     pub proxy_url: Option<String>,
 }
 
+impl LlmConfig {
+    /// 是否启用 Agent 对话能力：
+    /// 配置了 API key，或 base_url 指向本机（本地 Ollama / vLLM 通常无 key）。
+    pub fn enabled(&self) -> bool {
+        if !self.api_key.is_empty() {
+            return true;
+        }
+        let host = self
+            .base_url
+            .strip_prefix("http://")
+            .or_else(|| self.base_url.strip_prefix("https://"))
+            .unwrap_or(&self.base_url)
+            .split([':', '/'])
+            .next()
+            .unwrap_or("");
+        matches!(host, "localhost" | "127.0.0.1" | "::1")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
     /// SQLite 连接串，如 sqlite://data/music.db?mode=rwc
@@ -71,6 +97,9 @@ impl AppConfig {
                 timeout: Duration::from_millis(env_parse("LLM_TIMEOUT_MS", 30_000)),
                 max_retries: env_parse("LLM_MAX_RETRIES", 2),
                 proxy_url: env_opt("LLM_PROXY_URL"),
+            },
+            agent: AgentConfig {
+                max_iterations: env_parse("AGENT_MAX_ITERATIONS", 6),
             },
             storage: StorageConfig {
                 database_url: env_or("DATABASE_URL", "sqlite://data/music.db?mode=rwc".to_string()),

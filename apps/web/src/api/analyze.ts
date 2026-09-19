@@ -32,7 +32,7 @@ export interface AnalyzeResponse {
   midi_base64?: string;
 }
 
-export type PipelineStep = 'pitch' | 'notes' | 'midi';
+export type PipelineStep = 'pitch' | 'notes' | 'midi' | 'rhythm';
 
 export interface AnalyzeOptions {
   sampleRate?: number;
@@ -76,7 +76,9 @@ export function downloadMidi(base64: string, filename = 'transcription.mid'): vo
   for (let i = 0; i < binary.length; i += 1) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/midi' }));
+  const url = URL.createObjectURL(
+    new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'audio/midi' }),
+  );
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;

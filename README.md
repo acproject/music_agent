@@ -230,6 +230,7 @@ python -m app.main
 | GET | `/health` | 网关与引擎健康状态 |
 | GET | `/api/audio/stream` | WebSocket：实时音频块 → PitchFrame 事件 |
 | POST | `/api/music/analyze` | 离线分析；body 为原始 `Float32LE` PCM（`application/octet-stream`） |
+| POST | `/api/agent/chat` | AI 老师 ReAct 对话（JSON：多轮历史 + 可选最近录音 PCM） |
 
 Analyze 查询参数：`sample_rate`（默认 16000，8k–192k）、`channels`（默认 1，
 多声道自动下混）、`pipeline`（默认 `notes,midi`，可选 `pitch,notes,midi`）。
@@ -241,6 +242,41 @@ curl -X POST "http://127.0.0.1:8080/api/music/analyze?sample_rate=16000&pipeline
 
 响应 JSON：`sequence.notes[]`（midi / cents_offset / onset / duration /
 velocity / confidence）、`events[]`、`midi_base64`（Standard MIDI File）。
+
+## AI 老师 Agent（ReAct 工具闭环）
+
+`POST /api/agent/chat` 在网关内运行 `ReActAgent`（tool-calling 循环），把最近一次
+录音和分析引擎包装成 6 个工具：`ping_engine`、`get_current_recording`、
+`analyze_pitch`、`detect_notes`、`analyze_rhythm`、`transcribe_music`。
+Agent 的 system prompt 明确禁止伪造分析结果——所有音准/节奏/转谱结论必须来自
+工具返回的证据；同一请求内多个分析工具共享一次 gRPC `AnalyzeAudio` 调用
+（pipeline=`notes,midi,rhythm`，经 `RecordingContext` 缓存）。
+
+设计要点：
+
+- **无服务端会话存储**：前端每次请求携带最近 20 条历史与可选最近录音
+  （`pcm_base64`，标准 base64 的 Float32LE，上限 48MB）。
+- **未配置 LLM 时返回 503** + 中文配置指引，录音/转谱功能不受影响。
+- 工具返回 `status=no_recording / engine_down` 等结构化证据，Agent 会如实告知
+  用户而不是编造数据。
+
+请求示例：
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/agent/chat \
+  -H "Content-Type: application/json" -d '{
+    "messages": [{"role": "user", "content": "分析这段录音的音准"}],
+    "recording": {
+      "pcm_base64": "<Float32LE base64>",
+      "sample_rate": 16000, "channels": 1, "label": "麦克风录音"
+    }
+  }'
+# → {"reply": "……", "model": "qwen-plus"}
+```
+
+启用方式：在 `.env` 中设置 OpenAI 兼容服务的 `LLM_API_KEY` / `LLM_BASE_URL` /
+`LLM_MODEL`（支持 OpenAI、Qwen、DeepSeek 或本机 Ollama/vLLM——仅指向
+localhost 时可不带 key），迭代轮次由 `AGENT_MAX_ITERATIONS`（默认 6）控制。
 
 ## 测试
 
@@ -266,6 +302,18 @@ cd apps/web && pnpm build
   真实采样音色库（jsdelivr CDN + Cache API 本地缓存，加载失败自动回退振荡器合成），
   并按推断调性自动生成低音 / 和弦垫伴奏轨，支持分轨选择 GM 乐器、调音量，
   可导出含完整编排的多轨 MIDI
-- **M4（计划）** 节拍/速度自动检测，替换当前固定 BPM=100 的量化假设
+- **M4（进行中）** 节拍/速度/调性自动检测：纯 numpy 基线（频谱通量自相关测速、
+  重音周期判 3/4 与 4/4、Krumhansl–Schmuckler 轮廓判调性），
+  AnalyzeAudio 新增 "rhythm" 管线步骤，输出 Tempo/Key/Beat/Measure 事件，
+  NoteSequence 携带检测 bpm/key/拍号，前端量化与自动伴奏直接消费（可手动覆盖）；
+  已支持**多段变速 tempo map**：滑窗分段测速 + 迟滞切段，秒↔tick 分段线性映射，
+  后端输出多条 Tempo 事件、MIDI 指挥轨写多 FF51，前端量化/播放/导出全链路消费
+  （UI 显示速度段摘要，可手动锁定恒定速度后一键恢复检测）；
+  后续：ChordEvent 逐小节和弦、librosa/NN 高精度后端
+- **M5（进行中）** AI 老师 Agent 闭环：`POST /api/agent/chat` 一元 JSON 接口，
+  请求级装配 6 个工具（ping + 录音元信息/音准/音符/节奏/转谱），复用 ReActAgent
+  tool-calling 循环，证据约束禁止伪造分析结果，同请求多工具共享一次 gRPC 分析
+  （RecordingContext 缓存）；无服务端会话，前端随请求携带多轮历史与最近录音；
+  未配置 LLM 时 503 + 中文配置指引；后续：真实 LLM 端到端调优、流式输出
 
 完整产品设计见 [prompt.md](prompt.md)。

@@ -1,9 +1,11 @@
 // 浏览器端 Standard MIDI File 写入器（format 1 多轨，与 Python app/midi.py 对齐）。
 //
 // 用途：把当前编排（旋律 + 可选伴奏、各轨 GM 乐器/力度）导出为 .mid，
-// 不依赖后端返回；480 TPQ，指挥轨放速度/拍号，乐器轨带轨道名 + program change。
+// 不依赖后端返回；480 TPQ，指挥轨放多段速度/拍号，乐器轨带轨道名 + program change。
 
-export const TPQ = 480;
+import { secToTick, TPQ, type TempoAnchor } from './tempoMap';
+
+export { TPQ };
 /** 16 分音符网格 → tick：480/4 = 120 */
 export const TICKS_PER_UNIT = TPQ / 4;
 
@@ -76,12 +78,24 @@ function timeSignatureMeta(numerator = 4, denominator = 4): number[] {
   return meta(0x58, [numerator, denomExp[denominator] ?? 2, 24, 8]);
 }
 
-function conductorTrack(bpm: number, numerator: number, denominator: number): number[] {
-  const body = [
-    ...vlq(0), ...tempoMeta(bpm),
-    ...vlq(0), ...timeSignatureMeta(numerator, denominator),
-    ...vlq(0), 0xff, 0x2f, 0x00,
-  ];
+function conductorTrack(tempoMap: TempoAnchor[], numerator: number, denominator: number): number[] {
+  // (绝对 tick, 排序键, 字节)；多段速度各一个 FF51，tick 由秒域锚点积分得到
+  type Ev = [number, number, number[]];
+  const events: Ev[] = tempoMap.map((a) => [
+    Math.max(0, Math.round(secToTick(a.timeSec, tempoMap))),
+    -2,
+    tempoMeta(a.bpm),
+  ]);
+  events.push([0, -1, timeSignatureMeta(numerator, denominator)]);
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+  const body: number[] = [];
+  let prev = 0;
+  for (const [tick, , raw] of events) {
+    body.push(...vlq(tick - prev), ...raw);
+    prev = tick;
+  }
+  body.push(...vlq(0), 0xff, 0x2f, 0x00);
   return chunk('MTrk', body);
 }
 
@@ -115,10 +129,10 @@ function instrumentTrack(spec: MidiTrackSpec): number[] {
   return chunk('MTrk', body);
 }
 
-/** 多轨 → format-1 SMF 字节。 */
+/** 多轨 → format-1 SMF 字节（tempoMap 支持多段变速，音符已在 tick 域不受影响）。 */
 export function writeSmf(
   tracks: MidiTrackSpec[],
-  bpm: number,
+  tempoMap: TempoAnchor[],
   numerator = 4,
   denominator = 4,
 ): Uint8Array {
@@ -139,7 +153,7 @@ export function writeSmf(
       ...u16(1 + tracks.length), // 指挥轨 + 乐器轨
       ...u16(TPQ),
     ]),
-    ...conductorTrack(bpm, numerator, denominator),
+    ...conductorTrack(tempoMap, numerator, denominator),
     ...tracks.flatMap(instrumentTrack),
   ];
   return Uint8Array.from(body);

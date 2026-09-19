@@ -59,8 +59,8 @@ fn error_response(status: StatusCode, code: &str, message: String) -> Response {
 const B64_TABLE: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// 标准 Base64（带填充）。MIDI 体积小，内联编码器避免再引一个三方依赖。
-fn base64_encode(input: &[u8]) -> String {
+/// 标准 Base64（带填充）。MIDI/PCM 体积小，内联编解码器避免再引三方依赖。
+pub(crate) fn base64_encode(input: &[u8]) -> String {
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     for chunk in input.chunks(3) {
         let b0 = u32::from(chunk[0]);
@@ -79,6 +79,50 @@ fn base64_encode(input: &[u8]) -> String {
         );
     }
     out
+}
+
+/// 标准 Base64 解码（要求正确填充）；非法输入返回 None。
+pub(crate) fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some(u32::from(c - b'A')),
+            b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let bytes = input.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let mut sextets = [0u32; 4];
+        let mut pad = 0;
+        for (i, &c) in chunk.iter().enumerate() {
+            if c == b'=' {
+                sextets[i] = 0;
+                pad += 1;
+            } else {
+                if pad > 0 {
+                    return None; // '=' 后不允许再有有效字符
+                }
+                sextets[i] = val(c)?;
+            }
+        }
+        let triple = (sextets[0] << 18) | (sextets[1] << 12) | (sextets[2] << 6) | sextets[3];
+        out.push((triple >> 16) as u8);
+        if pad < 2 {
+            out.push((triple >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(triple as u8);
+        }
+    }
+    Some(out)
 }
 
 pub async fn analyze(
@@ -179,4 +223,30 @@ pub async fn analyze(
     }
 
     Json(payload).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_decode, base64_encode};
+
+    #[test]
+    fn base64_roundtrip_covers_padding_shapes() {
+        for input in [
+            vec![],
+            vec![0x4d],
+            vec![0x54, 0x68],
+            vec![0x64, 0x00, 0x00, 0x00, 0x06],
+            (0u8..200).collect::<Vec<u8>>(),
+        ] {
+            let encoded = base64_encode(&input);
+            assert_eq!(base64_decode(&encoded).as_ref(), Some(&input));
+        }
+    }
+
+    #[test]
+    fn base64_decode_rejects_bad_input() {
+        assert!(base64_decode("abc").is_none()); // 长度非 4 的倍数
+        assert!(base64_decode("ab=d").is_none()); // 填充后还有字符
+        assert!(base64_decode("ab*=").is_none()); // 非法字符
+    }
 }
