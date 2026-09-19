@@ -260,7 +260,12 @@ cd apps/web && pnpm build
 - **M0** 工作区骨架：proto 契约、Python gRPC 引擎 Ping、Rust 网关、Docker
 - **M2** 实时链路：YIN 音高检测、WebSocket 透传、前端麦克风采集与音高曲线
 - **M3** 离线转谱：整段 f0 轨迹 + 频谱通量起音 → Note 分割 → NoteSequence / MIDI，
-  五线谱/简谱渲染；新增可切换 CREPE ONNX 高质量后端与镜像下载工具
+  五线谱/简谱渲染（支持浏览器内按 BPM 合成播放并同步高亮当前音符）；
+  新增可切换 CREPE ONNX 高质量后端与镜像下载工具；
+  MIDI 升级为 Format-1 多音轨（指挥轨 + 旋律轨），前端接入 SoundFont（MusyngKite）
+  真实采样音色库（jsdelivr CDN + Cache API 本地缓存，加载失败自动回退振荡器合成），
+  并按推断调性自动生成低音 / 和弦垫伴奏轨，支持分轨选择 GM 乐器、调音量，
+  可导出含完整编排的多轨 MIDI
 - **M4（计划）** 节拍/速度自动检测，替换当前固定 BPM=100 的量化假设
 
 完整产品设计见 [prompt.md](prompt.md)。

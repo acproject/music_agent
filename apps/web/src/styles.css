@@ -469,6 +469,92 @@ button:disabled {
   font-size: 12px;
 }
 
+/* M3 多轨混音器（SoundFont 音色） */
+.mixer {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #d8dde8);
+  border-radius: 10px;
+  background: #f8f9fc;
+}
+
+.mixer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.mixer-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mixer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.mixer-name {
+  width: 52px;
+  flex: none;
+  font-size: 12px;
+  color: #4a5568;
+}
+
+.mixer-row select {
+  flex: 1;
+  min-width: 150px;
+  max-width: 220px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.mixer-row input[type='range'] {
+  width: 110px;
+  flex: none;
+}
+
+.voice-badge {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #4a5568;
+}
+
+.voice-loading {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.voice-sampled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.voice-synth {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.mixer-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #8892a6;
+}
+
 .jp-item {
   display: inline-flex;
   align-items: center;

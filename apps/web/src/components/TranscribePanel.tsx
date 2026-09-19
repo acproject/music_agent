@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { analyzeAudio, downloadMidi, type AnalyzeResponse } from '../api/analyze';
+import { analyzeAudio, type AnalyzeResponse } from '../api/analyze';
 import { AudioCapture, TARGET_SAMPLE_RATE } from '../audio/AudioCapture';
-import { ScorePlayer } from '../audio/scorePlayer';
+import { ScorePlayer, type PlaybackTrack, type VoiceKind } from '../audio/scorePlayer';
+import { INSTRUMENTS, instrumentLabel } from '../audio/soundfont';
 import { noteName } from '../audio/pitchTrace';
+import { buildArrangement, type TrackId } from '../domain/arrangement';
 import { quantize } from '../domain/quantize';
+import { TICKS_PER_UNIT, writeSmf } from '../domain/midiWriter';
 import StaffScore from './StaffScore';
 import JianpuScore from './JianpuScore';
 
@@ -52,6 +55,20 @@ export default function TranscribePanel() {
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [activeItem, setActiveItem] = useState<number | null>(null);
+
+  // 多轨编排：自动伴奏开关、各轨 GM 音色 / 音量 / 当前发声方式
+  const [accompOn, setAccompOn] = useState(true);
+  const [programs, setPrograms] = useState<Record<TrackId, number>>({
+    melody: 0, // 原声大钢琴
+    bass: 32, // 原声贝斯
+    pad: 48, // 弦乐合奏
+  });
+  const [gains, setGains] = useState<Record<TrackId, number>>({
+    melody: 0.9,
+    bass: 0.8,
+    pad: 0.6,
+  });
+  const [voices, setVoices] = useState<Partial<Record<TrackId, VoiceKind | 'loading'>>>({});
 
   const captureRef = useRef<AudioCapture | null>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
@@ -154,6 +171,20 @@ export default function TranscribePanel() {
     [result, bpm],
   );
 
+  // 多轨编排：旋律 + 自动低音/和弦垫（推断调性、每小节选顺阶三和弦）
+  const arrangement = useMemo(
+    () =>
+      score
+        ? buildArrangement(score, {
+            accompaniment: accompOn,
+            melodyProgram: programs.melody,
+            bassProgram: programs.bass,
+            padProgram: programs.pad,
+          })
+        : null,
+    [score, accompOn, programs],
+  );
+
   // 重新分析或改速度导致 score 变化时，停止旧播放
   useEffect(() => {
     playerRef.current?.stop();
@@ -162,31 +193,69 @@ export default function TranscribePanel() {
   }, [score]);
 
   const handlePlay = useCallback(async () => {
-    if (!score) {
+    if (!arrangement || arrangement.tracks[0].notes.length === 0) {
       return;
     }
     if (!playerRef.current) {
       playerRef.current = new ScorePlayer();
     }
     setError(null);
+    setVoices(Object.fromEntries(arrangement.tracks.map((t) => [t.id, 'loading' as const])));
+    const playbackTracks: PlaybackTrack[] = arrangement.tracks.map((t) => ({
+      id: t.id,
+      program: t.program,
+      gain: gains[t.id] ?? 0.8,
+      notes: t.notes,
+    }));
     setPlaying(true);
     try {
-      await playerRef.current.play(score, {
+      await playerRef.current.play(playbackTracks, bpm, {
         onActive: setActiveItem,
         onEnd: () => {
           setPlaying(false);
           setActiveItem(null);
+        },
+        onVoice: (trackId, kind) => {
+          setVoices((v) => ({ ...v, [trackId]: kind }));
         },
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPlaying(false);
     }
-  }, [score]);
+  }, [arrangement, gains, bpm]);
 
   const handleStopPlay = useCallback(() => {
     playerRef.current?.stop();
   }, []);
+
+  // 多轨 MIDI（Type-1）：按当前编排（乐器 / 自动伴奏）即时生成下载
+  const handleDownloadMidi = useCallback(() => {
+    if (!arrangement) {
+      return;
+    }
+    const smfTracks = arrangement.tracks.map((t, i) => ({
+      name: t.name,
+      program: t.program,
+      channel: i === 0 ? 0 : i + 1,
+      notes: t.notes.map((n) => ({
+        midi: n.midi,
+        startTick: n.startUnit * TICKS_PER_UNIT,
+        durationTick: n.durationUnits * TICKS_PER_UNIT,
+        velocity: n.velocity,
+      })),
+    }));
+    const bytes = writeSmf(smfTracks, bpm);
+    const blob = new Blob([bytes], { type: 'audio/midi' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `music_agent_arrangement_${bpm}bpm.mid`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [arrangement, bpm]);
 
   const notes = result?.sequence.notes ?? [];
 
@@ -222,13 +291,13 @@ export default function TranscribePanel() {
         >
           合成测试音（C-E-G-C）
         </button>
-        {result?.midi_base64 && (
+        {arrangement && (
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => downloadMidi(result.midi_base64!, `${result.recording_id}.mid`)}
+            onClick={handleDownloadMidi}
           >
-            下载 MIDI
+            下载多轨 MIDI
           </button>
         )}
       </div>
@@ -260,6 +329,61 @@ export default function TranscribePanel() {
 
       {score && (
         <div className="score-block">
+          <div className="mixer">
+            <div className="mixer-head">
+              <span>🎹 SoundFont 真实音色 · 多音轨</span>
+              <label className="mixer-switch">
+                <input
+                  type="checkbox"
+                  checked={accompOn}
+                  onChange={(e) => setAccompOn(e.target.checked)}
+                />
+                自动伴奏（低音 + 和弦垫 · 推断调性 {arrangement?.keyName ?? '—'}）
+              </label>
+            </div>
+            {arrangement?.tracks.map((track) => {
+              const voice = voices[track.id];
+              return (
+                <div className="mixer-row" key={track.id}>
+                  <span className="mixer-name">{track.name}</span>
+                  <select
+                    value={track.program}
+                    onChange={(e) =>
+                      setPrograms((p) => ({ ...p, [track.id]: Number(e.target.value) }))
+                    }
+                  >
+                    {INSTRUMENTS.map((ins) => (
+                      <option key={ins.program} value={ins.program}>
+                        {ins.label}（GM {ins.program}）
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={gains[track.id]}
+                    onChange={(e) =>
+                      setGains((g) => ({ ...g, [track.id]: Number(e.target.value) }))
+                    }
+                    aria-label={`${track.name}音量`}
+                  />
+                  <span className={`voice-badge voice-${voice ?? 'idle'}`}>
+                    {voice === 'loading'
+                      ? '音色加载中…'
+                      : voice === 'sampled'
+                        ? '采样音色'
+                        : voice === 'synth'
+                          ? '合成回退'
+                          : instrumentLabel(track.program)}
+                  </span>
+                </div>
+              );
+            })}
+            <p className="mixer-hint">首次使用某乐器会从 CDN 下载采样（约 0.3–3MB），之后由浏览器缓存。</p>
+          </div>
+
           <div className="score-toolbar">
             <h3>五线谱</h3>
             {playing ? (
@@ -267,7 +391,10 @@ export default function TranscribePanel() {
             ) : (
               <button type="button" onClick={handlePlay}>▶ 播放谱面</button>
             )}
-            <span className="meta">浏览器合成 · 按 ♩={bpm} 播放标准音高（不含音分偏差）</span>
+            <span className="meta">
+              SoundFont 采样 · ♩={bpm} · {arrangement?.tracks.length ?? 1} 轨齐奏
+              （标准音高，不含音分偏差）
+            </span>
           </div>
           <StaffScore score={score} activeItem={activeItem} />
           <h3>简谱（1=C）</h3>
