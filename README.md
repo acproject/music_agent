@@ -140,6 +140,35 @@ Windows 下每个服务会开一个独立 PowerShell 窗口（直接看实时日
 Linux 下以 `setsid` 独立进程组后台运行。也支持 `--no-engine` / `--no-api` /
 `--no-web` 单独跳过某服务。Python 解释器可用环境变量 `PYTHON` 覆盖。
 
+### 平板 / 手机局域网访问（麦克风需要 HTTPS）
+
+浏览器只在安全上下文开放麦克风（`getUserMedia`）：`localhost` 天然可用，
+但通过 `http://<局域网IP>:5173` 访问时麦克风 API 会被整个禁用，设备列表显示
+“未检测到设备”。需要局域网访问时，带 `DEV_HTTPS=1` 启动前端（自签证书在启动时
+动态生成，SAN 自动覆盖本机所有局域网 IP）：
+
+```powershell
+# Windows PowerShell
+$env:DEV_HTTPS = '1'
+powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
+```
+
+```bash
+# Linux / macOS
+DEV_HTTPS=1 scripts/start-all.sh
+```
+
+然后在平板浏览器打开 **`https://<本机局域网IP>:5173`**（注意是 https），首次会有
+证书警告，选择“高级 → 继续访问”，再在弹窗中允许麦克风即可。REST 与 WebSocket
+均经 Vite 同源代理，网关系保持 HTTP 本机监听，无需改动。
+
+其他注意：
+
+- 平板与电脑需在同一 Wi-Fi；Windows 防火墙需放行入站 TCP 5173（专用网络）。
+- 若 HTTPS 下设备列表仍为空，检查 Windows「设置 → 隐私和安全性 → 麦克风」
+  是否允许桌面应用访问麦克风，以及声音面板中输入设备未被禁用。
+- 本机开发直接用 http://localhost:5173 即可，无需 HTTPS。
+
 ### Docker 一键起后端
 
 ```bash

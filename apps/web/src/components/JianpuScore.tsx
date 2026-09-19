@@ -1,4 +1,3 @@
-import { Fragment } from 'react';
 import type { QuantizedScore, ScoreItem } from '../domain/quantize';
 
 // 简谱渲染：与五线谱共用 quantize() 的唯一输出（C 大调固定调唱名，M3 不做移调）。
@@ -42,35 +41,46 @@ function Glyph({ item }: { item: ScoreItem }) {
 
 /** 把一个量化条目渲染为 [数字/休止] + 增时线 + 附点序列。
  *  附点二分 = 数字 + 增时线 + 附点（1—·，共 3 拍）。 */
-function ItemUnits({ item }: { item: ScoreItem }) {
+function ItemUnits({ item, active }: { item: ScoreItem; active: boolean }) {
   const dashes = item.base === 'w' ? 3 : item.base === 'h' ? 1 : 0;
 
   return (
-    <Fragment>
+    <span className={`jp-item ${active && item.kind === 'note' ? 'jp-item-active' : ''}`}>
       <Glyph item={item} />
       {Array.from({ length: dashes }, (_, i) => (
         <span className="jp-dash" key={`dash-${i}`}>—</span>
       ))}
       {item.dotted && <span className="jp-dot">·</span>}
-    </Fragment>
+    </span>
   );
 }
 
-export default function JianpuScore({ score }: { score: QuantizedScore | null }) {
+export default function JianpuScore({
+  score,
+  activeItem = null,
+}: {
+  score: QuantizedScore | null;
+  activeItem?: number | null;
+}) {
   if (!score || score.measures.length === 0) {
     return null;
   }
 
+  let globalBase = 0;
   return (
     <div className="jianpu">
-      {score.measures.map((measure, mi) => (
-        <div className="jp-measure" key={mi}>
-          <span className="jp-bar-no">{mi + 1}</span>
-          {measure.items.map((item, ii) => (
-            <ItemUnits item={item} key={ii} />
-          ))}
-        </div>
-      ))}
+      {score.measures.map((measure, mi) => {
+        const base = globalBase;
+        globalBase += measure.items.length;
+        return (
+          <div className="jp-measure" key={mi}>
+            <span className="jp-bar-no">{mi + 1}</span>
+            {measure.items.map((item, ii) => (
+              <ItemUnits item={item} active={base + ii === activeItem} key={ii} />
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

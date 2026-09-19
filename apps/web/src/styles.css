@@ -454,6 +454,39 @@ button:disabled {
   font-size: 15px;
 }
 
+.score-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.score-toolbar h3 {
+  margin: 0;
+}
+
+.score-toolbar .meta {
+  font-size: 12px;
+}
+
+.jp-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 3px;
+  border-radius: 6px;
+  transition: background-color 0.08s linear, color 0.08s linear;
+}
+
+.jp-item-active {
+  background: rgba(79, 124, 255, 0.22);
+}
+
+.jp-item-active .jp-num,
+.jp-item-active .jp-accid,
+.jp-item-active .jp-oct {
+  color: #a8c0ff;
+}
+
 /* 五线谱使用浅色"纸张"底：VexFlow 默认以黑色绘制，深底下不可见 */
 .score-scroll {
   background: #fbf8f1;

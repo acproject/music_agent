@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyzeAudio, downloadMidi, type AnalyzeResponse } from '../api/analyze';
 import { AudioCapture, TARGET_SAMPLE_RATE } from '../audio/AudioCapture';
+import { ScorePlayer } from '../audio/scorePlayer';
 import { noteName } from '../audio/pitchTrace';
 import { quantize } from '../domain/quantize';
 import StaffScore from './StaffScore';
@@ -49,8 +50,11 @@ export default function TranscribePanel() {
   const [pcmSec, setPcmSec] = useState(0);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [activeItem, setActiveItem] = useState<number | null>(null);
 
   const captureRef = useRef<AudioCapture | null>(null);
+  const playerRef = useRef<ScorePlayer | null>(null);
   const chunksRef = useRef<ArrayBuffer[]>([]);
   const pcmRef = useRef<Float32Array | null>(null);
   const timerRef = useRef(0);
@@ -59,6 +63,7 @@ export default function TranscribePanel() {
   useEffect(() => () => {
     window.clearInterval(timerRef.current);
     void captureRef.current?.stop();
+    playerRef.current?.stop();
   }, []);
 
   const runAnalysis = useCallback(async (pcm: Float32Array) => {
@@ -149,6 +154,40 @@ export default function TranscribePanel() {
     [result, bpm],
   );
 
+  // 重新分析或改速度导致 score 变化时，停止旧播放
+  useEffect(() => {
+    playerRef.current?.stop();
+    setPlaying(false);
+    setActiveItem(null);
+  }, [score]);
+
+  const handlePlay = useCallback(async () => {
+    if (!score) {
+      return;
+    }
+    if (!playerRef.current) {
+      playerRef.current = new ScorePlayer();
+    }
+    setError(null);
+    setPlaying(true);
+    try {
+      await playerRef.current.play(score, {
+        onActive: setActiveItem,
+        onEnd: () => {
+          setPlaying(false);
+          setActiveItem(null);
+        },
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPlaying(false);
+    }
+  }, [score]);
+
+  const handleStopPlay = useCallback(() => {
+    playerRef.current?.stop();
+  }, []);
+
   const notes = result?.sequence.notes ?? [];
 
   return (
@@ -221,10 +260,18 @@ export default function TranscribePanel() {
 
       {score && (
         <div className="score-block">
-          <h3>五线谱</h3>
-          <StaffScore score={score} />
+          <div className="score-toolbar">
+            <h3>五线谱</h3>
+            {playing ? (
+              <button type="button" className="btn-danger" onClick={handleStopPlay}>■ 停止播放</button>
+            ) : (
+              <button type="button" onClick={handlePlay}>▶ 播放谱面</button>
+            )}
+            <span className="meta">浏览器合成 · 按 ♩={bpm} 播放标准音高（不含音分偏差）</span>
+          </div>
+          <StaffScore score={score} activeItem={activeItem} />
           <h3>简谱（1=C）</h3>
-          <JianpuScore score={score} />
+          <JianpuScore score={score} activeItem={activeItem} />
           <div className="note-chips">
             {notes.map((n, i) => (
               <span className="note-chip" key={i} title={`置信度 ${(n.confidence * 100).toFixed(0)}%`}>

@@ -97,6 +97,19 @@ if [ ! -f "$PY_PROTO" ]; then
     (cd "$ROOT" && PYTHON="$PYTHON" node scripts/gen_proto.mjs python) || die "Python proto 生成失败。"
 fi
 
+# 预检：解释器必须能实际加载桩（protobuf runtime 旧于 gencode 时提前给出可操作提示）
+if [ "$NO_ENGINE" -eq 0 ]; then
+    proto_root="$ROOT/services/analysis/app/proto"
+    if ! probe_err="$(PYTHONPATH="$proto_root" "$PYTHON" -c 'from music.v1 import analysis_pb2' 2>&1)"; then
+        die "Python 解释器无法加载 proto 桩（依赖缺失或 protobuf 运行时旧于生成代码版本）。
+解释器：$PYTHON
+请对齐依赖：
+  $PYTHON -m pip install -r \"$ROOT/services/analysis/requirements.txt\"
+或 PYTHON=/path/to/python 指定其他解释器。
+原始错误：$(printf '%s' "$probe_err" | tail -n 2)"
+    fi
+fi
+
 if [ "$NO_API" -eq 0 ]; then
     if ! have cargo; then die "未找到 cargo，请先安装 Rust 工具链（rustup）。"; fi
     API_BIN="$ROOT/target/debug/music-api"
@@ -170,10 +183,26 @@ if [ "$NO_WEB" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------- 汇总
+web_scheme=http
+if [ "${DEV_HTTPS:-}" = '1' ] || [ "${DEV_HTTPS:-}" = 'true' ]; then
+    web_scheme=https
+fi
+
+# 局域网 IPv4（剔除回环/链路本地），HTTPS 时作为平板/手机入口提示
+lan_lines=''
+if [ "$web_scheme" = https ]; then
+    if have ip; then
+        lan_lines="$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print "  平板/手机入口  https://"a[1]":5173（首次需信任自签证书）"}')"
+    elif have ifconfig; then
+        lan_lines="$(ifconfig 2>/dev/null | grep -oE 'inet (addr:)?[0-9.]+' | awk '{print $NF}' | grep -vE '^(127\.|169\.254\.)' | sed 's#^#  平板/手机入口  https://#; s#$#:5173（首次需信任自签证书）#')"
+    fi
+fi
+
 cat <<EOF
 
 ============== 全部服务已启动 ==============
-  Web 前端       http://localhost:5173
+  Web 前端       $web_scheme://localhost:5173
+$lan_lines
   HTTP 网关      http://localhost:8080
   健康检查       http://localhost:8080/health
   gRPC 引擎      127.0.0.1:50051

@@ -93,6 +93,22 @@ if (-not (Test-Path $pyProto)) {
     if ($LASTEXITCODE -ne 0) { Die "Python proto 生成失败。" }
 }
 
+# 预检：解释器必须能实际加载桩（protobuf runtime 旧于 gencode 时此处提前报错，
+# 而不是等引擎窗口里抛 VersionError）
+if (-not $NoEngine) {
+    $protoRoot = Join-Path $Root 'services/analysis/app/proto'
+    $oldPyPath = $env:PYTHONPATH
+    $env:PYTHONPATH = $protoRoot
+    $probeOut = & $PythonExe -c 'from music.v1 import analysis_pb2' 2>&1
+    $probeCode = $LASTEXITCODE
+    if ($null -ne $oldPyPath) { $env:PYTHONPATH = $oldPyPath } else { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue }
+    if ($probeCode -ne 0) {
+        $req = Join-Path $Root 'services/analysis/requirements.txt'
+        $detail = ($probeOut | Select-Object -Last 2 | Out-String).Trim()
+        Die "Python 解释器无法加载 proto 桩（依赖缺失或 protobuf 运行时旧于生成代码版本）。`n解释器：$PythonExe`n请对齐依赖：`n  `"$PythonExe`" -m pip install -r `"$req`"`n或用 `$env:PYTHON 指向其他解释器。`n原始错误：$detail"
+    }
+}
+
 if (-not $NoApi) {
     # protoc 只在首次构建 / proto 变更时需要
     $apiBin = Join-Path $Root 'target/debug/music-api.exe'
@@ -183,7 +199,14 @@ if (-not $NoWeb) {
 # ---------------------------------------------------------------- 汇总
 Write-Host ''
 Write-Host '============== 全部服务已启动 ==============' -ForegroundColor Green
-Write-Host '  Web 前端       http://localhost:5173'
+$webScheme = if ($env:DEV_HTTPS -eq '1' -or $env:DEV_HTTPS -eq 'true') { 'https' } else { 'http' }
+Write-Host "  Web 前端       ${webScheme}://localhost:5173"
+if ($webScheme -eq 'https') {
+    $lanIps = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+        Select-Object -ExpandProperty IPAddress -Unique
+    foreach ($ip in $lanIps) { Write-Host "  平板/手机入口  https://$ip:5173（首次需信任自签证书）" }
+}
 Write-Host '  HTTP 网关      http://localhost:8080'
 Write-Host '  健康检查       http://localhost:8080/health'
 Write-Host '  gRPC 引擎      127.0.0.1:50051'

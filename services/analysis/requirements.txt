@@ -1,7 +1,11 @@
 # M0：gRPC 通信与数值基础
-grpcio>=1.67
-grpcio-tools>=1.67
-protobuf>=5.27
+# 版本约束说明：*_pb2.py 由 grpcio-tools（捆绑 protoc）生成，protobuf 运行时
+# 不得旧于生成代码版本（gencode），否则启动即报 VersionError。
+# 三者须一同升级后重新生成桩：pip install -U grpcio grpcio-tools protobuf
+# 再执行 node scripts/gen_proto.mjs python。当前已测矩阵：1.84.0 / 1.84.0 / 7.35.1。
+grpcio>=1.84.0
+grpcio-tools>=1.84.0
+protobuf>=7.35.1
 numpy>=1.26
 
 # M3：离线高质量音高后端 CREPE（ONNX Runtime CPU 版，无需 torch）。

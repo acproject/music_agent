@@ -15,7 +15,7 @@ const FIRST_STAVE_X = 10;
 const FIRST_STAVE_USABLE = STAVE_W - 100; // 谱号 + 拍号占位
 const OTHER_USABLE = STAVE_W - 44;
 
-function toTickable(item: ScoreItem): StaveNote {
+function toTickable(item: ScoreItem, active: boolean): StaveNote {
   const duration = `${item.base}${item.kind === 'rest' ? 'r' : ''}`;
   // VexFlow 5：附点必须同时声明 dots（计入时值 tick）与 Dot 修饰符（渲染圆点），
   // 仅 addModifier(new Dot()) 是视觉附点，不会改变 tick，Voice 会报 IncompleteVoice。
@@ -30,10 +30,19 @@ function toTickable(item: ScoreItem): StaveNote {
   if (item.dotted) {
     note.addModifier(new Dot());
   }
+  if (active && item.kind === 'note') {
+    note.setStyle({ fillStyle: '#4f7cff', strokeStyle: '#4f7cff' });
+  }
   return note;
 }
 
-export default function StaffScore({ score }: { score: QuantizedScore | null }) {
+export default function StaffScore({
+  score,
+  activeItem = null,
+}: {
+  score: QuantizedScore | null;
+  activeItem?: number | null;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -48,6 +57,8 @@ export default function StaffScore({ score }: { score: QuantizedScore | null }) 
     renderer.resize(width, STAVE_H);
     const context = renderer.getContext();
 
+    // 每个小节首个 item 的全局序号（与 ScorePlayer.flatten 的展开顺序一致）
+    let globalBase = 0;
     score.measures.forEach((measure, i) => {
       const x = FIRST_STAVE_X + i * STAVE_W;
       const stave = new Stave(x, 20, STAVE_W);
@@ -60,14 +71,18 @@ export default function StaffScore({ score }: { score: QuantizedScore | null }) 
         numBeats: 4,
         beatValue: 4,
       });
-      voice.addTickables(measure.items.map(toTickable));
+      voice.addTickables(
+        measure.items.map((item, ii) => toTickable(item, globalBase + ii === activeItem)),
+      );
 
       new Formatter()
         .joinVoices([voice])
         .format([voice], i === 0 ? FIRST_STAVE_USABLE : OTHER_USABLE);
       voice.draw(context, stave);
+
+      globalBase += measure.items.length;
     });
-  }, [score]);
+  }, [score, activeItem]);
 
   if (!score || score.measures.length === 0) {
     return null;
