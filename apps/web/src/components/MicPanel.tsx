@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AudioCapture,
+  describeMicError,
   enumerateMicDevices,
+  micEnvironment,
+  requestMicAndEnumerate,
   FRAME_BYTES,
   type MicPermissionState,
 } from '../audio/AudioCapture';
@@ -61,6 +64,9 @@ function levelToDb(level: number): string {
 export default function MicPanel() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
+  // 麦克风 API 只在安全上下文（HTTPS / localhost）可用
+  const [env] = useState(micEnvironment);
+  const [probing, setProbing] = useState(false);
   const [micState, setMicState] = useState<MicPermissionState>('idle');
   const [wsState, setWsState] = useState<WsState>('idle');
   const [runState, setRunState] = useState<RunState>('idle');
@@ -135,11 +141,43 @@ export default function MicPanel() {
     }
   }, [deviceId]);
 
+  // 主动触发一次授权弹窗；授权后 enumerateDevices 才会返回真实设备数量与名称
+  const handleProbe = useCallback(async () => {
+    setProbing(true);
+    setNotice(null);
+    try {
+      const list = await requestMicAndEnumerate();
+      setDevices(list);
+      if (!deviceId && list[0]?.deviceId) {
+        setDeviceId(list[0].deviceId);
+      }
+      if (list.length === 0) {
+        setNotice({
+          kind: 'error',
+          text: '浏览器已获授权但系统未提供任何麦克风：请检查 Windows「设置 → 隐私和安全性 → 麦克风」是否允许桌面应用访问，并确认声音面板中该输入设备未被禁用。',
+        });
+      } else {
+        setNotice({ kind: 'info', text: `检测到 ${list.length} 个麦克风设备。` });
+      }
+    } catch (err) {
+      setNotice({ kind: 'error', text: describeMicError(err).message });
+    } finally {
+      setProbing(false);
+    }
+  }, [deviceId]);
+
   useEffect(() => {
     void refreshDevices();
     navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices);
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices);
   }, [refreshDevices]);
+
+  // 开始录音授权成功后重新枚举，设备名随之填充
+  useEffect(() => {
+    if (micState === 'granted') {
+      void refreshDevices();
+    }
+  }, [micState, refreshDevices]);
 
   const handleStart = useCallback(async () => {
     if (runState === 'connecting' || runState === 'live' || runState === 'paused') {
@@ -299,6 +337,15 @@ export default function MicPanel() {
         </span>
       </div>
 
+      {(!env.secure || !env.supported) && (
+        <p className="bad mic-env-warn">
+          ⚠ 当前地址 {typeof window !== 'undefined' && <strong>{window.location.origin}</strong>}{' '}
+          不是安全上下文，浏览器已禁用麦克风 API（即使系统声音面板里有设备也无法使用）。
+          本机请改用 <strong>http://localhost:5173</strong>；平板/手机请以 <strong>https://</strong>{' '}
+          开头的地址访问（设置环境变量 DEV_HTTPS=1 后重新运行启动脚本）。
+        </p>
+      )}
+
       <div className="mic-controls">
         <label className="device-select">
           <span>输入设备</span>
@@ -318,6 +365,15 @@ export default function MicPanel() {
             刷新
           </button>
         </label>
+
+        {env.secure && env.supported && devices.length === 0 && !live && !busy && (
+          <p className="notice mic-device-hint">
+            尚未授权麦克风，或系统未向浏览器开放设备。
+            <button type="button" className="btn-mini" onClick={handleProbe} disabled={probing}>
+              {probing ? '授权检测中…' : '授权并检测设备'}
+            </button>
+          </p>
+        )}
 
         <div className="btn-row">
           {!live && (

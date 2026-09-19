@@ -64,10 +64,15 @@ class NoteTracker:
         self,
         sample_rate: int = 16_000,
         params: SegmentationParams | None = None,
+        backend: object | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.p = params or SegmentationParams()
-        self.detector = YinDetector(sample_rate=sample_rate)
+        # backend 鸭型分派：
+        #   - 默认 pitch.YinDetector：逐帧 detect（实时链路同款，零依赖）；
+        #   - model_pitch.CrepeBackend：整段批量 track()（ONNX 高质量后端）。
+        # 两者输出同一 10ms 帧网格，后续分割逻辑与 f0 来源解耦。
+        self.detector = backend or YinDetector(sample_rate=sample_rate)
         self.hop = max(1, int(round(self.p.hop_sec * sample_rate)))
         self.win = max(self.hop, int(round(self.p.win_sec * sample_rate)))
 
@@ -88,16 +93,36 @@ class NoteTracker:
         voiced = np.zeros(count, dtype=bool)
         conf = np.zeros(count, dtype=np.float64)
 
-        for k, s in enumerate(starts):
-            r: PitchResult = self.detector.detect(pcm[s:s + self.win])
-            # 帧时间取分析窗中点：YIN 描述的是窗内基频，
-            # 中点比窗起点更接近实际发声时刻。
-            times[k] = (s + self.win / 2) / self.sample_rate
-            if r.voiced:
-                hz[k] = r.frequency_hz
-                midi[k] = r.midi_cents
-                voiced[k] = True
-                conf[k] = r.confidence
+        batch_track = getattr(self.detector, "track", None)
+        if callable(batch_track):
+            # 批量后端（CREPE）：内部固定 16k + 自有取帧，返回同网格数组
+            b_times, b_hz, b_midi, b_voiced, b_conf = batch_track(
+                pcm, self.p.hop_sec, self.p.win_sec
+            )
+            count = min(count, b_times.size)
+            times[:count] = b_times[:count]
+            hz[:count] = b_hz[:count]
+            midi[:count] = b_midi[:count]
+            voiced[:count] = b_voiced[:count]
+            conf[:count] = b_conf[:count]
+            if b_times.size < starts.size:
+                # 重采样后帧数略少：截断尾部未填充槽位
+                times = times[:count]
+                hz = hz[:count]
+                midi = midi[:count]
+                voiced = voiced[:count]
+                conf = conf[:count]
+        else:
+            for k, s in enumerate(starts):
+                r: PitchResult = self.detector.detect(pcm[s:s + self.win])
+                # 帧时间取分析窗中点：YIN 描述的是窗内基频，
+                # 中点比窗起点更接近实际发声时刻。
+                times[k] = (s + self.win / 2) / self.sample_rate
+                if r.voiced:
+                    hz[k] = r.frequency_hz
+                    midi[k] = r.midi_cents
+                    voiced[k] = True
+                    conf[k] = r.confidence
 
         # voiced 帧做 3 点中值平滑，剔除单帧八度/五度跳变；unvoiced 帧不参与
         if count >= 3:

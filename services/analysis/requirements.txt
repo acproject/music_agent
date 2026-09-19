@@ -4,12 +4,16 @@ grpcio-tools>=1.67
 protobuf>=5.27
 numpy>=1.26
 
+# M3：离线高质量音高后端 CREPE（ONNX Runtime CPU 版，无需 torch）。
+# 懒加载：仅 PITCH_BACKEND=crepe 时导入；不装也不影响默认 YIN 与实时链路。
+# 权重不随仓库分发，需另跑：python scripts/download_model.py --models tiny
+onnxruntime>=1.17
+
 # M2 已实现：app/pitch.py 内为纯 numpy YIN 实时音高（40ms/帧，零原生依赖）
 #
 # 后续可选增强（暂不安装）：
 # aubio           # C 核心实时音高/onset，作为 YIN 的加速/对照实现
 # librosa         # 高质量分析、节拍、色度
-# crepe           # 高质量基频深度模型
 # note-seq / basic-pitch  # 音频转 MIDI
 # pretty-midi     # MIDI 生成
 # music21         # MusicXML / 五线谱

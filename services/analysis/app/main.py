@@ -48,6 +48,28 @@ DEFAULT_BPM = 100
 DEFAULT_TIME_SIGNATURE = "4/4"
 
 
+def build_note_tracker(sample_rate: int) -> NoteTracker:
+    """按环境变量 PITCH_BACKEND 构建离线分割器。
+
+    yin（默认）：纯 numpy，零额外依赖；crepe：本地 ONNX 高质量后端，
+    权重由 scripts/download_model.py 下载。实时 StreamAudio 始终用 YIN。
+    """
+    name = config.PITCH_BACKEND
+    if name == "yin":
+        return NoteTracker(sample_rate=sample_rate)
+    if name == "crepe":
+        from .model_pitch import CrepeBackend
+
+        backend = CrepeBackend(
+            sample_rate=sample_rate,
+            model_size=config.CREPE_MODEL,
+            model_dir=config.CREPE_MODEL_DIR or None,
+            min_confidence=config.CREPE_MIN_CONFIDENCE,
+        )
+        return NoteTracker(sample_rate=sample_rate, backend=backend)
+    raise ValueError(f"未知 PITCH_BACKEND={name!r}，可选：yin / crepe")
+
+
 class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
     """music.v1.AnalysisService 实现。"""
 
@@ -157,7 +179,14 @@ class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
             sorted(steps),
         )
 
-        notes, track = NoteTracker(sample_rate=sample_rate).run(pcm)
+        try:
+            tracker = build_note_tracker(sample_rate)
+        except (ImportError, FileNotFoundError, ValueError) as exc:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                f"音高后端不可用：{exc}",
+            )
+        notes, track = tracker.run(pcm)
 
         seq = events_pb2.NoteSequence(
             total_duration=total_duration,
@@ -220,6 +249,19 @@ class AnalysisService(analysis_pb2_grpc.AnalysisServiceServicer):
 
 
 def serve() -> None:
+    if config.PITCH_BACKEND not in ("yin", "crepe"):
+        raise SystemExit(
+            f"未知 PITCH_BACKEND={config.PITCH_BACKEND!r}，可选：yin / crepe"
+        )
+    # crepe 后端在启动时预热一次：缺权重 / 缺 onnxruntime 立即暴露，
+    # 而非等到首个分析请求才失败（ONNX 会话本身带缓存，重复构建代价很小）。
+    if config.PITCH_BACKEND == "crepe":
+        try:
+            build_note_tracker(config.REALTIME_SAMPLE_RATE)
+        except (ImportError, FileNotFoundError) as exc:
+            raise SystemExit(f"crepe 后端初始化失败：{exc}") from exc
+    logger.info("offline pitch backend: %s", config.PITCH_BACKEND)
+
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     analysis_pb2_grpc.add_AnalysisServiceServicer_to_server(
         AnalysisService(), server

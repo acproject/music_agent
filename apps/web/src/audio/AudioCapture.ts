@@ -32,6 +32,26 @@ export async function enumerateMicDevices(): Promise<MediaDeviceInfo[]> {
   return devices.filter((d) => d.kind === 'audioinput');
 }
 
+/** 麦克风 API 运行环境：浏览器仅在安全上下文（HTTPS 或 localhost）开放该能力 */
+export function micEnvironment(): { secure: boolean; supported: boolean } {
+  const secure = typeof window !== 'undefined' && window.isSecureContext === true;
+  const supported = Boolean(navigator.mediaDevices?.getUserMedia);
+  return { secure, supported };
+}
+
+/**
+ * 主动发起一次最小权限的麦克风请求以触发浏览器授权弹窗，
+ * 授权后 enumerateDevices 才会返回真实数量与设备名；随后立即释放试探流。
+ */
+export async function requestMicAndEnumerate(): Promise<MediaDeviceInfo[]> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new DOMException('mediaDevices unavailable', 'NotSupportedError');
+  }
+  const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  probe.getTracks().forEach((t) => t.stop());
+  return enumerateMicDevices();
+}
+
 /** 把 getUserMedia 异常翻译成中文用户可读原因 */
 export function describeMicError(err: unknown): { state: MicPermissionState; message: string } {
   const name = err instanceof DOMException ? err.name : String(err);
@@ -44,6 +64,11 @@ export function describeMicError(err: unknown): { state: MicPermissionState; mes
       return { state: 'no-device', message: '未找到可用的麦克风输入设备' };
     case 'NotReadableError':
       return { state: 'in-use', message: '麦克风被其他应用占用，请关闭后重试' };
+    case 'NotSupportedError':
+      return {
+        state: 'unsupported',
+        message: '当前页面不是安全上下文（HTTPS 或 localhost），浏览器禁用了麦克风 API',
+      };
     default:
       return { state: 'error', message: `麦克风初始化失败：${name}` };
   }
@@ -69,7 +94,17 @@ export class AudioCapture {
   }
 
   async start(deviceId?: string): Promise<void> {
-    if (!window.AudioWorkletNode || !navigator.mediaDevices?.getUserMedia) {
+    const { secure, supported } = micEnvironment();
+    if (!secure || !supported) {
+      this.handlers.onPermission(
+        'unsupported',
+        secure
+          ? '当前浏览器不支持麦克风采集（getUserMedia 不可用）'
+          : '当前页面不是安全上下文（HTTPS 或 localhost），浏览器禁用了麦克风 API',
+      );
+      return;
+    }
+    if (!window.AudioWorkletNode) {
       this.handlers.onPermission('unsupported', '当前浏览器不支持 AudioWorklet 实时音频');
       return;
     }

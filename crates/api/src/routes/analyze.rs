@@ -125,6 +125,7 @@ pub async fn analyze(
             let code = match status.code() {
                 tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
                 tonic::Code::Unimplemented => StatusCode::NOT_IMPLEMENTED,
+                tonic::Code::FailedPrecondition => StatusCode::SERVICE_UNAVAILABLE,
                 tonic::Code::Unavailable | tonic::Code::Cancelled => StatusCode::BAD_GATEWAY,
                 tonic::Code::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,

@@ -17,6 +17,13 @@ services/analysis/app/proto/
 /data
 .env
 
+# 模型权重（体积大，由 scripts/download_model.py 按需下载）
+/models/
+
+# 本地启停脚本产物（日志 / PID）
+/logs/
+/.run/
+
 # IDE / OS
 .idea/
 .vscode/
