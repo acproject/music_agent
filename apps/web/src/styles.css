@@ -773,6 +773,73 @@ button:disabled {
   color: var(--muted);
 }
 
+/* M7 视唱跟练（实时 score following） */
+.sf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin: 10px 0;
+}
+
+.sf-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.sf-chip {
+  min-width: 44px;
+  text-align: center;
+}
+
+.sf-chip.sf-ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.sf-chip.sf-wrong {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.sf-chip.sf-missing {
+  border-style: dashed;
+  opacity: 0.55;
+}
+
+.sf-chip.sf-current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(91, 140, 255, 0.45);
+}
+
+.sf-live {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.sf-summary {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(151, 163, 184, 0.25);
+}
+
+.sf-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 18px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.sf-metrics strong {
+  font-variant-numeric: tabular-nums;
+}
+
 .chart-legend span {
   display: inline-flex;
   align-items: center;

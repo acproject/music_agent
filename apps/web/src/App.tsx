@@ -3,6 +3,7 @@ import { fetchHealth, type HealthResponse } from './api/health';
 import { runWsCheck, type WsCheckResult } from './api/wsCheck';
 import { sampleNote } from './domain/sample';
 import MicPanel from './components/MicPanel';
+import SightSingingPanel from './components/SightSingingPanel';
 import TranscribePanel from './components/TranscribePanel';
 import AgentChat from './components/AgentChat';
 
@@ -122,6 +123,8 @@ export default function App() {
       </section>
 
       <MicPanel />
+
+      <SightSingingPanel />
 
       <TranscribePanel />
 

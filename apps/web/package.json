@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "proto": "node ../../scripts/gen_proto.mjs web"
+    "proto": "node ../../scripts/gen_proto.mjs web",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.0",
@@ -24,6 +26,7 @@
     "selfsigned": "^5.5.0",
     "ts-proto": "^2.6.0",
     "typescript": "~5.8.0",
-    "vite": "^6.3.0"
+    "vite": "^6.3.0",
+    "vitest": "^5.0.1"
   }
 }

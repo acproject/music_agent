@@ -289,6 +289,9 @@ cargo test
 
 # Web 类型检查 / 构建
 cd apps/web && pnpm build
+
+# Web 领域逻辑单测（vitest）
+cd apps/web && pnpm test
 ```
 
 ## 开发里程碑
@@ -315,5 +318,22 @@ cd apps/web && pnpm build
   tool-calling 循环，证据约束禁止伪造分析结果，同请求多工具共享一次 gRPC 分析
   （RecordingContext 缓存）；无服务端会话，前端随请求携带多轮历史与最近录音；
   未配置 LLM 时 503 + 中文配置指引；后续：真实 LLM 端到端调优、流式输出
+- **M6（进行中）** Performance 比较层 `compare_performance`（Phase 2 核心）：
+  前端 `domain/comparePerformance.ts` 将量化谱目标音符与实际录音 NoteEvent 做
+  Needleman–Wunsch 全局单调对齐（按起音时间而非音高，错音不错位），产出与
+  proto `PerformanceEvent` 同构的逐音结果（pitch_error_cents / timing_error_ms /
+  小节 + 小节内音号），并识别漏音与多音、汇总音准/节奏合格率与完整度综合分；
+  同一核心以三档模式支撑视唱训练、节奏训练（忽略音高）、乐器错音检测；
+  `targetNotesFromScore` 经多段 tempo map 把网格谱面铺到秒轴并合并跨小节切分音；
+  汇总逻辑抽取为 `assemblePerformanceReport`，离线与实时共用同一评分口径；
+  后续：练习（Exercise）目标谱、Agent compare_performance 工具
+- **M7** 实时 score following 增量对齐：前端 `domain/scoreFollower.ts` 直接消费
+  40ms PitchFrame 流——两段状态机先做帧→音切分（连续 3 帧确认起音且音高收拢、
+  90ms 无声间隙切音、70¢ 稳定跳变切分连奏、短噪丢弃、置信度门限），
+  再做音→谱在线单调对齐（游标 + 前瞻窗口，错音按位置锁定，超时判漏唱、
+  配不上的音记多唱，EMA 漂移适应仅移动接受窗口、上报偏差永远相对原始谱面），
+  任意时刻可取快照，结束产出与 M6 同构的 PerformanceReport；
+  新增「视唱跟练」面板（内置琶音/音阶练习、预备拍、目标音带、实时音分/起音反馈、
+  练后综合报告），36 个领域测试覆盖准点/错音/迟到/抢拍/渐慢/漏唱/多音/连奏等场景
 
 完整产品设计见 [prompt.md](prompt.md)。
