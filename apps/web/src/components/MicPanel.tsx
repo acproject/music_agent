@@ -6,10 +6,13 @@ import {
   micEnvironment,
   requestMicAndEnumerate,
   FRAME_BYTES,
+  FRAME_SAMPLES,
+  TARGET_SAMPLE_RATE,
   type MicPermissionState,
 } from '../audio/AudioCapture';
 import { MusicSocket, type ReadyInfo, type WsState } from '../audio/MusicSocket';
 import { centsOffset, noteName, PitchTrace } from '../audio/pitchTrace';
+import { recordingStore } from '../domain/recordingStore';
 import PitchChart from './PitchChart';
 
 // 目标音候选：C3(48) ~ B5(83)
@@ -75,14 +78,17 @@ export default function MicPanel() {
   const [paused, setPaused] = useState(false);
 
   // 250ms 刷新一次的统计（高频计数放 ref，避免每帧 re-render）
-  const [stats, setStats] = useState({ sent: 0, dropped: 0, events: 0 });
+  const [stats, setStats] = useState({ sent: 0, dropped: 0, events: 0, buffered: 0 });
   const [target, setTarget] = useState<number | null>(60); // 默认目标 C4
   const [readout, setReadout] = useState<PitchReadout | null>(null);
 
   const captureRef = useRef<AudioCapture | null>(null);
   const socketRef = useRef<MusicSocket | null>(null);
   const traceRef = useRef(new PitchTrace());
-  const countersRef = useRef({ sent: 0, dropped: 0, events: 0 });
+  const countersRef = useRef({ sent: 0, dropped: 0, events: 0, buffered: 0 });
+  // 本地 PCM 累积：分块入队、停止时一次性合并（避免逐帧扩容拷贝）。
+  // 暂停期间 worklet 不下发帧，因此缓冲天然不含暂停片段。
+  const pcmChunksRef = useRef<Float32Array[]>([]);
   const levelRef = useRef(0);
   const meterRef = useRef<HTMLDivElement | null>(null);
   const dbRef = useRef<HTMLSpanElement | null>(null);
@@ -187,7 +193,8 @@ export default function MicPanel() {
     setReadyInfo(null);
     setReadout(null);
     traceRef.current.reset();
-    countersRef.current = { sent: 0, dropped: 0, events: 0 };
+    countersRef.current = { sent: 0, dropped: 0, events: 0, buffered: 0 };
+    pcmChunksRef.current = [];
     setPaused(false);
     setRunState('connecting');
 
@@ -206,6 +213,10 @@ export default function MicPanel() {
       },
       onFrame: (pcm, level) => {
         levelRef.current = level;
+        // 本地始终累积整段 PCM（与 WS 是否就绪无关，断线重连期间也不丢歌声），
+        // 帧缓冲由 worklet postMessage 结构化克隆产生，每帧独立、可直接入队
+        pcmChunksRef.current.push(new Float32Array(pcm));
+        countersRef.current.buffered += 1;
         const sent = socketRef.current?.sendFrame(pcm) ?? false;
         if (sent) {
           countersRef.current.sent += 1;
@@ -269,6 +280,9 @@ export default function MicPanel() {
       setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
       await capture.stop();
       captureRef.current = null;
+      // 会话未建立，丢弃握手期间缓存的零散音频
+      pcmChunksRef.current = [];
+      countersRef.current.buffered = 0;
     }
   }, [deviceId, runState]);
 
@@ -293,15 +307,43 @@ export default function MicPanel() {
     const socket = socketRef.current;
     captureRef.current = null;
     socketRef.current = null;
+    // 先停采集，确保合并期间不再有新帧入队
     await capture?.stop();
     setMicState('idle');
     await socket?.stop();
     setWsState('closed');
+
+    // 分块队列一次性合并：先求总长再单次分配，每段只拷贝一次
+    const chunks = pcmChunksRef.current;
+    pcmChunksRef.current = [];
+    const frameCount = chunks.length;
+    let savedText = '';
+    if (frameCount > 0) {
+      const totalSamples = chunks.reduce((acc, c) => acc + c.length, 0);
+      const pcm = new Float32Array(totalSamples);
+      let offset = 0;
+      for (const chunk of chunks) {
+        pcm.set(chunk, offset);
+        offset += chunk.length;
+      }
+      const durationSec = totalSamples / TARGET_SAMPLE_RATE;
+      // analyzedAt=null：尚未转谱，但 AI 老师工具可直接对这段 PCM 做分析
+      recordingStore.set({
+        pcm,
+        sampleRate: TARGET_SAMPLE_RATE,
+        label: 'M2 实时麦克风录音',
+        durationSec,
+        analyzedAt: null,
+      });
+      savedText = `，已保存 ${durationSec.toFixed(1)} 秒录音，可在下方「AI 音乐老师」直接提问分析`;
+    }
+    countersRef.current.buffered = 0;
+
     setRunState('idle');
     setPaused(false);
     levelRef.current = 0;
     setReadout(null);
-    setNotice({ kind: 'info', text: '会话已结束' });
+    setNotice({ kind: 'info', text: `会话已结束${savedText}` });
   }, []);
 
   const targetDeltaCents =
@@ -423,6 +465,10 @@ export default function MicPanel() {
         <span>已发帧 <strong>{stats.sent}</strong></span>
         <span>丢弃帧 <strong className={stats.dropped > 0 ? 'warn' : ''}>{stats.dropped}</strong></span>
         <span>回流事件 <strong>{stats.events}</strong></span>
+        <span>
+          本地录音{' '}
+          <strong>{((stats.buffered * FRAME_SAMPLES) / TARGET_SAMPLE_RATE).toFixed(1)}s</strong>
+        </span>
         <span className="meta">每帧 {FRAME_BYTES}B / 40ms @ 16kHz 单声道</span>
       </div>
 

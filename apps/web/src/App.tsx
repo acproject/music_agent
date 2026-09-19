@@ -3,6 +3,8 @@ import { fetchHealth, type HealthResponse } from './api/health';
 import { runWsCheck, type WsCheckResult } from './api/wsCheck';
 import { sampleNote } from './domain/sample';
 import MicPanel from './components/MicPanel';
+import SightReadingTrainer from './components/SightReadingTrainer';
+import RhythmTrainer from './components/RhythmTrainer';
 import SightSingingPanel from './components/SightSingingPanel';
 import TranscribePanel from './components/TranscribePanel';
 import AgentChat from './components/AgentChat';
@@ -57,7 +59,7 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <h1>AI 音乐教学系统</h1>
-        <p className="subtitle">M4 音频转谱与节奏分析 · ReAct AI 老师（工具调用闭环）· VexFlow 五线谱/简谱</p>
+        <p className="subtitle">M8 视唱/节奏结构化训练（规则生成 → 录音 → 比较层评分 → 小节级反馈）· ReAct AI 老师 · VexFlow 五线谱</p>
       </header>
 
       <section className="grid">
@@ -125,6 +127,10 @@ export default function App() {
       <MicPanel />
 
       <SightSingingPanel />
+
+      <SightReadingTrainer />
+
+      <RhythmTrainer />
 
       <TranscribePanel />
 

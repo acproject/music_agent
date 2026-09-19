@@ -241,6 +241,10 @@ export class MusicSocket {
   /** 通知服务端结束本次会话，等待 stopped 回执后关闭 */
   async stop(): Promise<void> {
     this.stopping = true;
+    // 主动结束属于终态关闭：抑制 onclose 里的自动重连（close 的事件回调是异步的，
+    // 不能依赖 stopping 标志在回调触发前仍然为 true）
+    this.manuallyClosed = true;
+    window.clearTimeout(this.reconnectTimer);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       await new Promise<void>((resolve) => {
         this.stopResolve = resolve;
